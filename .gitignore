@@ -1,0 +1,41 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+wheels/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ---- Virtual envs ----
+.venv/
+venv/
+env/
+
+# ---- Bundled molecule editor (downloaded, ~97 MB — see README) ----
+src/tg_ml/static/ketcher/
+
+# ---- Runtime outputs (results & logs saved by tgcli) ----
+outputs/
+*.log
+
+# ---- Local data (datasets are not part of this tool) ----
+data/
+
+# ---- Secrets — never commit ----
+kaggle.json
+.kaggle/
+*.key
+*.pem
+.env
+id_rsa*
+*credentials*
+
+# ---- OS / editor cruft ----
+.DS_Store
+.idea/
+.vscode/
+*.swp

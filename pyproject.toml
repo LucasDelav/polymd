@@ -1,0 +1,35 @@
+[project]
+name = "tg-md"
+version = "0.1.0"
+description = "Predict polymer properties (Tg, density, …) by molecular dynamics from a monomer SMILES — local CLI + web app, compute offloaded to an HPC cluster."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+keywords = ["polymer", "glass-transition", "molecular-dynamics", "cheminformatics", "rdkit"]
+dependencies = [
+    # Front-end local (CLI `tgcli` + web app `tgweb`). Le calcul MD lui-même tourne sur le cluster.
+    "rdkit>=2024.3",       # validation/normalisation du PSMILES, conversion KET
+    "typer>=0.12.0",       # CLI
+    "rich>=13.7.0",        # affichage CLI
+    "fastapi>=0.110.0",    # webapp
+    "uvicorn>=0.29.0",     # serveur ASGI
+]
+
+[project.optional-dependencies]
+# Dépendances du pipeline MD (scripts/pipeline.py) côté cluster. OpenMM + OpenFF + ASE
+# s'installent via conda/mamba (cf. README), pas par pip — d'où leur absence ici.
+pipeline = ["numpy>=1.26", "scipy>=1.11"]
+
+[project.scripts]
+tgcli = "tg_ml.cli:app"
+tgweb = "tg_ml.webapp:main"
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/tg_ml/static/index.html" = "tg_ml/static/index.html"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tg_ml"]

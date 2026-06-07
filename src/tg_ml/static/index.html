@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tgcli — polymer properties</title>
+<style>
+  :root{ --bg:#0e1116; --side:#161b22; --line:#222b36; --acc:#4fc3f7; --acc2:#0a2530;
+         --ok:#5bbf6a; --warn:#ffb74d; --err:#ef5350; --txt:#e6edf3; --dim:#7d8a99; }
+  *{ box-sizing:border-box; } html,body{ height:100%; margin:0; }
+  body{ font-family:system-ui,-apple-system,Segoe UI,sans-serif; background:var(--bg); color:var(--txt); }
+  .app{ display:flex; height:100vh; }
+
+  /* ---------- SIDEBAR ---------- */
+  .side{ width:340px; min-width:340px; background:var(--side); border-right:1px solid var(--line);
+         display:flex; flex-direction:column; }
+  .side .brand{ padding:16px 20px 13px; border-bottom:1px solid var(--line); display:flex; align-items:flex-start; gap:10px; }
+  .side .brand .txt{ flex:1; }
+  .side .brand h1{ margin:0; font-size:17px; letter-spacing:.2px; }
+  .side .brand p{ margin:3px 0 0; font-size:12px; color:var(--dim); }
+  #lang{ width:auto; padding:3px 6px; font-size:11px; background:#0c1117; color:var(--dim);
+         border:1px solid #2b3947; border-radius:6px; }
+  .side .body{ padding:15px 20px; overflow:auto; flex:1; }
+  .grp{ margin-bottom:15px; }
+  .grp h3{ font-size:11px; text-transform:uppercase; letter-spacing:.6px; color:var(--dim); margin:0 0 8px; }
+  .lblrow{ display:flex; align-items:center; gap:5px; margin:10px 0 4px; }
+  label{ display:block; font-size:12px; color:var(--dim); }
+  .lblrow label{ margin:0; }
+  input,select{ width:100%; padding:8px 10px; background:#0c1117; color:var(--txt);
+                border:1px solid #2b3947; border-radius:7px; font-size:13px; outline:none; }
+  input:focus,select:focus{ border-color:var(--acc); }
+  .two{ display:flex; gap:10px; } .two>div{ flex:1; min-width:0; }
+  .chk{ display:flex; align-items:center; gap:8px; margin-top:11px; font-size:13px; color:var(--txt); }
+  .chk input{ width:16px; height:16px; flex:none; }
+  .chk .tip{ margin-left:auto; }
+  #valid{ font-size:12px; margin-top:8px; min-height:16px; line-height:1.5; }
+  .side .foot{ padding:14px 20px; border-top:1px solid var(--line); }
+  button{ width:100%; padding:11px; border:0; border-radius:8px; font-weight:600; font-size:14px; cursor:pointer; }
+  .btn-go{ background:var(--acc); color:#062330; } .btn-go:disabled{ opacity:.45; cursor:not-allowed; }
+  .btn-sec{ background:#243240; color:var(--txt); font-weight:500; font-size:12px; padding:9px; margin-top:10px; }
+  .ok{color:var(--ok)} .warn{color:var(--warn)} .err{color:var(--err)} .dim{color:var(--dim)}
+  .pill{ display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; background:#3a2e12; color:var(--warn); }
+
+  /* ---------- ADVANCED (collapsible) ---------- */
+  details.adv{ margin-top:4px; border-top:1px solid var(--line); padding-top:11px; }
+  details.adv>summary{ cursor:pointer; font-size:11px; text-transform:uppercase; letter-spacing:.6px;
+        color:var(--dim); list-style:none; user-select:none; }
+  details.adv>summary::-webkit-details-marker{ display:none; }
+  details.adv>summary::before{ content:'▸ '; }
+  details.adv[open]>summary::before{ content:'▾ '; }
+
+  /* ---------- TOOLTIP (info bubble) ---------- */
+  .tip{ display:inline-flex; align-items:center; justify-content:center; width:14px; height:14px; flex:none;
+        border:1px solid #3a4856; border-radius:50%; font-size:9px; font-style:normal; font-weight:700;
+        color:var(--dim); cursor:help; }
+  .tip:hover{ border-color:var(--acc); color:var(--acc); }
+  .floatip{ position:fixed; z-index:100; display:none; max-width:260px; background:#0b1219;
+        border:1px solid #2b3947; border-radius:8px; padding:9px 11px; font-size:11.5px; line-height:1.5;
+        color:var(--txt); box-shadow:0 8px 28px rgba(0,0,0,.55); pointer-events:none; }
+
+  /* ---------- MAIN ---------- */
+  .main{ flex:1; position:relative; display:flex; flex-direction:column; min-width:0; }
+  .topbar{ padding:12px 22px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px;
+           font-size:13px; color:var(--dim); }
+  .topbar .dot{ width:8px; height:8px; border-radius:50%; background:#445; }
+  .topbar .dot.run{ background:var(--warn); box-shadow:0 0 8px var(--warn); }
+  .topbar .dot.ok{ background:var(--ok); }
+  .stage{ flex:1; position:relative; min-height:0; }
+  .view{ position:absolute; inset:0; }
+  .hidden{ display:none !important; }
+
+  #ketcher-frame{ width:100%; height:100%; border:0; background:#fff; display:block; }
+
+  .logwrap{ display:flex; flex-direction:column; height:100%; }
+  #log{ flex:1; overflow:auto; background:#070a0e; padding:16px 22px; font-family:ui-monospace,SFMono-Regular,monospace;
+        font-size:12.5px; line-height:1.6; white-space:pre-wrap; }
+  .results{ border-top:1px solid var(--line); padding:14px 22px; background:var(--side); max-height:46%; overflow:auto; }
+  .results h3{ margin:0 0 8px; font-size:13px; color:var(--acc); }
+  table{ width:100%; border-collapse:collapse; font-size:13px; }
+  th,td{ text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); }
+  th{ color:var(--dim); font-weight:500; } td.v{ text-align:right; font-variant-numeric:tabular-nums; }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ===== SIDEBAR ===== -->
+  <aside class="side">
+    <div class="brand">
+      <div class="txt"><h1>tgcli</h1><p data-i18n="subtitle">Propriétés MD de polymères · calcul sur CRIANN</p></div>
+      <select id="lang" onchange="setLang(this.value)" title="Language">
+        <option value="en">EN</option><option value="fr">FR</option>
+      </select>
+    </div>
+    <div class="body">
+      <div class="grp">
+        <h3 data-i18n="grp_motif">Motif de répétition</h3>
+        <button class="btn-sec" onclick="grabSmiles()" data-i18n="grab">↓ Récupérer le SMILES du dessin</button>
+        <div class="lblrow"><label for="smiles" data-i18n="lbl_smiles">PSMILES (2 points d'attache *)</label>
+          <span class="tip" data-tip="tip_smiles">i</span></div>
+        <input id="smiles" value="*CC(*)c1ccccc1" oninput="validate()" spellcheck="false">
+        <div id="valid"></div>
+      </div>
+      <div class="grp">
+        <h3 data-i18n="grp_params">Paramètres</h3>
+        <div class="two">
+          <div>
+            <div class="lblrow"><label for="tg_exp" data-i18n="lbl_tg">Tg estimée (K)</label>
+              <span class="tip" data-tip="tip_tg">i</span></div>
+            <input id="tg_exp" type="number" value="373" oninput="validate()">
+          </div>
+          <div>
+            <div class="lblrow"><label for="partition" data-i18n="lbl_partition">Partition</label>
+              <span class="tip" data-tip="tip_partition">i</span></div>
+            <select id="partition"><option>gpu</option><option>gpu_debug</option><option>gpu_h200</option></select>
+          </div>
+        </div>
+
+        <details class="adv">
+          <summary data-i18n="grp_adv">Paramètres avancés</summary>
+          <div class="two">
+            <div>
+              <div class="lblrow"><label for="seeds" data-i18n="lbl_seeds">Graines</label>
+                <span class="tip" data-tip="tip_seeds">i</span></div>
+              <input id="seeds" type="number" min="1" value="1" placeholder="1">
+            </div>
+            <div>
+              <div class="lblrow"><label for="n_units" data-i18n="lbl_nunits">Unités (n)</label>
+                <span class="tip" data-tip="tip_nunits">i</span></div>
+              <input id="n_units" type="number" value="40" placeholder="40">
+            </div>
+          </div>
+          <div class="two">
+            <div>
+              <div class="lblrow"><label for="box_a" data-i18n="lbl_box">Boîte (Å)</label>
+                <span class="tip" data-tip="tip_box">i</span></div>
+              <input id="box_a" type="number" value="80" placeholder="80">
+            </div>
+            <div>
+              <div class="lblrow"><label for="t_step" data-i18n="lbl_tstep">Pas T (K)</label>
+                <span class="tip" data-tip="tip_tstep">i</span></div>
+              <input id="t_step" type="number" value="20" placeholder="20" oninput="validate()">
+            </div>
+          </div>
+          <div class="two">
+            <div>
+              <div class="lblrow"><label for="equil_ps" data-i18n="lbl_equil">Équil. (ps)</label>
+                <span class="tip" data-tip="tip_equil">i</span></div>
+              <input id="equil_ps" type="number" value="100" placeholder="100">
+            </div>
+            <div>
+              <div class="lblrow"><label for="sample_ps" data-i18n="lbl_sample">Mesure (ps)</label>
+                <span class="tip" data-tip="tip_sample">i</span></div>
+              <input id="sample_ps" type="number" value="50" placeholder="50">
+            </div>
+          </div>
+          <div class="lblrow"><label for="time" data-i18n="lbl_time">Temps SLURM</label>
+            <span class="tip" data-tip="tip_time">i</span></div>
+          <input id="time" value="02:00:00">
+          <div class="chk"><input id="shear" type="checkbox"> <span data-i18n="chk_shear">Modules G/E/ν (expérimental)</span>
+            <span class="tip" data-tip="tip_shear">i</span></div>
+        </details>
+
+        <div class="chk"><input id="mech" type="checkbox" checked> <span data-i18n="chk_mech">Calculer module K / δ</span>
+          <span class="tip" data-tip="tip_mech">i</span></div>
+        <div class="chk"><input id="sync" type="checkbox" checked> <span data-i18n="chk_sync">Synchroniser le code</span>
+          <span class="tip" data-tip="tip_sync">i</span></div>
+      </div>
+    </div>
+    <div class="foot"><button id="go" class="btn-go" onclick="run()" data-i18n="launch">▶ Lancer le calcul</button></div>
+  </aside>
+
+  <!-- ===== MAIN ===== -->
+  <div class="main">
+    <div class="topbar"><span id="dot" class="dot"></span><span id="status" data-i18n="status_start">Dessine le motif, puis lance le calcul</span>
+      <button id="newbtn" class="hidden" onclick="backToDraw()" data-i18n="newdraw"
+        style="margin-left:auto;width:auto;padding:6px 12px;background:#243240;color:var(--txt);font-size:12px">← Nouveau dessin</button></div>
+    <div class="stage">
+      <div id="draw-view" class="view"><iframe id="ketcher-frame" src="/static/ketcher/standalone/index.html"></iframe></div>
+      <div id="log-view" class="view hidden">
+        <div class="logwrap">
+          <div id="log"></div>
+          <div id="results" class="results hidden"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================ i18n ============================ */
+const I18N = {
+  en: {
+    subtitle:"MD polymer properties · computed on CRIANN",
+    grp_motif:"Repeat unit", grab:"↓ Get SMILES from drawing",
+    lbl_smiles:"PSMILES (2 attachment points *)",
+    grp_params:"Parameters", lbl_tg:"Estimated Tg (K)", lbl_partition:"Partition",
+    grp_adv:"Advanced parameters",
+    lbl_seeds:"Seeds", lbl_nunits:"Units (n)", lbl_box:"Box (Å)", lbl_tstep:"T step (K)", lbl_time:"SLURM time",
+    lbl_equil:"Equil. (ps)", lbl_sample:"Sample (ps)",
+    chk_shear:"Moduli G/E/ν (experimental)", chk_mech:"Compute modulus K / δ", chk_sync:"Sync code",
+    launch:"▶ Launch", status_start:"Draw the unit, then launch", newdraw:"← New drawing",
+    // tooltips
+    tip_seeds:"Number of independent random-seed runs (1 GPU job each). With >1, results are averaged and shown as mean ± standard error (σ/√N), which shrinks the uncertainty. 3–5 is a good trade-off; each seed costs one full run.",
+    tip_smiles:"SMILES of the repeat unit with exactly 2 attachment points (*). Each * is where the unit links to the next. Ex. polystyrene: *CC(*)c1ccccc1",
+    tip_tg:"Known or estimated glass-transition temperature (K). Used ONLY to center the cooling window — not a target value. A rough guess is fine.",
+    tip_partition:"CRIANN GPU partition. gpu = standard A100; gpu_debug = short ≤30 min queue (may be too short for a full run); gpu_h200 = H200 GPU.",
+    tip_nunits:"Degree of polymerization of the oligomer chain (default 40). Higher = longer chains and slower building.",
+    tip_box:"Simulation box edge in Å (default 80 ≈ 48,000 atoms). Do NOT reduce below ~80: under it the weak Tg signal drowns in noise (a statistical floor, not a bug).",
+    tip_tstep:"Temperature step of the cooling sweep, in K (default 20). Larger = fewer steps = faster, but a coarser Tg estimate.",
+    tip_time:"SLURM wall-clock limit (HH:MM:SS). The compute itself is ~15–18 min once the job starts; the rest is GPU queue wait.",
+    tip_equil:"Equilibration time per temperature step, in ps (default 100). Longer = better-relaxed structure, slower.",
+    tip_sample:"Production/sampling time per temperature step, in ps (default 50). Longer = less noisy density, slower.",
+    tip_shear:"Also compute shear/Young's moduli G, E and Poisson ratio ν. EXPERIMENTAL and not validated — the values can be unreliable.",
+    tip_mech:"Compute the bulk modulus K (and solubility δ) from volume fluctuations. Adds a little time.",
+    tip_sync:"Push the latest pipeline code to CRIANN before submitting. Leave on unless you know it is already up to date.",
+    // validation
+    v_ok:"OK ({n} heavy atoms, 2 attachment points).",
+    v_ok_nordkit:"OK (minimal check, RDKit absent).",
+    v_empty:"Draw the repeat unit with 2 attachment points *.",
+    v_unparsable:"SMILES not parsable.",
+    v_attach:"A PSMILES needs exactly 2 attachment points * (found: {n}).",
+    v_window:"Window {lo}→{hi} K · {n} steps",
+    v_risk:"{m} → Tg possibly underestimated",
+    risk_amide:"amide", risk_urethane:"urethane", risk_urea:"urea", risk_carboxylic_acid:"carboxylic acid",
+    // grab feedback
+    g_notready:"Editor not ready yet — let Ketcher finish loading, then retry.",
+    g_empty:"Empty drawing — draw the unit with 2 attachment points *.",
+    g_server:"Server unreachable for normalization.",
+    g_notconvertible:"Drawing not convertible to PSMILES. Make sure there are exactly 2 attachment points *.",
+    // run
+    r_submitting:"Submitting to CRIANN…", r_submitted:"✓ Job {id} submitted",
+    r_seeds_submitted:"✓ {n} seeds submitted: {ids}",
+    r_queued:"Job {id} queued…", r_state:"Job {id} · {state}…",
+    r_seedstate:"{done}/{total} seeds done…",
+    r_done:"Done", r_failed:"failed", r_neterr:"Network error",
+    r_risk:"⚠ motif {m}: Tg possibly underestimated",
+    err_invalid:"Invalid PSMILES.", err_ssh:"CRIANN connection error.",
+    res_title:"Predicted properties", res_unreliable:"⚠ Unreliable Tg fit",
+    res_seeds_note:"Mean over {n} seeds · ± = standard error σ/√N · reliable fits {r}/{n}",
+    res_perseed:"Tg per seed: {d}",
+    noprops:"No properties (job failed?).",
+    // property labels
+    Tg_pred:"Predicted Tg", density_300K:"Density @300K", FFV:"Free volume",
+    Rg_nm:"Radius of gyration", refractive_index:"Refractive index", Cp_JgK:"Heat capacity Cp",
+    K_GPa:"Bulk modulus K", solubility_delta:"Solubility δ",
+  },
+  fr: {
+    subtitle:"Propriétés MD de polymères · calcul sur CRIANN",
+    grp_motif:"Motif de répétition", grab:"↓ Récupérer le SMILES du dessin",
+    lbl_smiles:"PSMILES (2 points d'attache *)",
+    grp_params:"Paramètres", lbl_tg:"Tg estimée (K)", lbl_partition:"Partition",
+    grp_adv:"Paramètres avancés",
+    lbl_seeds:"Graines", lbl_nunits:"Unités (n)", lbl_box:"Boîte (Å)", lbl_tstep:"Pas T (K)", lbl_time:"Temps SLURM",
+    lbl_equil:"Équil. (ps)", lbl_sample:"Mesure (ps)",
+    chk_shear:"Modules G/E/ν (expérimental)", chk_mech:"Calculer module K / δ", chk_sync:"Synchroniser le code",
+    launch:"▶ Lancer le calcul", status_start:"Dessine le motif, puis lance le calcul", newdraw:"← Nouveau dessin",
+    tip_seeds:"Nombre de runs à graines aléatoires indépendantes (1 job GPU chacun). Avec >1, les résultats sont moyennés et affichés en moyenne ± erreur-type (σ/√N), ce qui réduit l'incertitude. 3–5 est un bon compromis ; chaque graine coûte un run complet.",
+    tip_smiles:"SMILES du motif de répétition avec exactement 2 points d'attache (*). Chaque * marque la liaison vers le motif suivant. Ex. polystyrène : *CC(*)c1ccccc1",
+    tip_tg:"Tg connue ou estimée (K). Sert UNIQUEMENT à centrer la fenêtre de refroidissement — pas une valeur cible. Une estimation grossière suffit.",
+    tip_partition:"Partition GPU CRIANN. gpu = A100 standard ; gpu_debug = file courte ≤30 min (souvent trop court pour un run complet) ; gpu_h200 = GPU H200.",
+    tip_nunits:"Degré de polymérisation de l'oligomère (défaut 40). Plus grand = chaînes plus longues, construction plus lente.",
+    tip_box:"Arête de la boîte de simulation en Å (défaut 80 ≈ 48 000 atomes). NE PAS descendre sous ~80 : en-dessous, le faible signal de Tg se noie dans le bruit (plancher statistique, pas un bug).",
+    tip_tstep:"Pas de température du balayage de refroidissement, en K (défaut 20). Plus grand = moins de paliers = plus rapide, mais Tg plus grossière.",
+    tip_time:"Limite de temps SLURM (HH:MM:SS). Le calcul lui-même dure ~15–18 min une fois lancé ; le reste est l'attente en file GPU.",
+    tip_equil:"Temps d'équilibration par palier de température, en ps (défaut 100). Plus long = structure mieux relaxée, plus lent.",
+    tip_sample:"Temps de production/échantillonnage par palier, en ps (défaut 50). Plus long = densité moins bruitée, plus lent.",
+    tip_shear:"Calcule aussi les modules de cisaillement/Young G, E et le coefficient de Poisson ν. EXPÉRIMENTAL et non validé — valeurs potentiellement peu fiables.",
+    tip_mech:"Calcule le module de compression K (et la solubilité δ) par fluctuations de volume. Ajoute un peu de temps.",
+    tip_sync:"Pousse le code du pipeline le plus récent vers CRIANN avant de soumettre. Laisse coché sauf si tu sais qu'il est déjà à jour.",
+    v_ok:"OK ({n} atomes lourds, 2 points d'attache).",
+    v_ok_nordkit:"OK (contrôle minimal, RDKit absent).",
+    v_empty:"Dessine le motif avec 2 points d'attache *.",
+    v_unparsable:"SMILES non parsable.",
+    v_attach:"Un PSMILES doit avoir exactement 2 points d'attache * (trouvé : {n}).",
+    v_window:"Fenêtre {lo}→{hi} K · {n} paliers",
+    v_risk:"{m} → Tg possiblement sous-estimée",
+    risk_amide:"amide", risk_urethane:"uréthane", risk_urea:"urée", risk_carboxylic_acid:"acide carboxylique",
+    g_notready:"Éditeur pas encore prêt — laisse Ketcher finir de charger puis réessaie.",
+    g_empty:"Dessin vide — trace le motif avec 2 points d'attache *.",
+    g_server:"Serveur injoignable pour la normalisation.",
+    g_notconvertible:"Dessin non convertible en PSMILES. Vérifie qu'il y a bien 2 points d'attache *.",
+    r_submitting:"Soumission sur CRIANN…", r_submitted:"✓ Job {id} soumis",
+    r_seeds_submitted:"✓ {n} graines soumises : {ids}",
+    r_queued:"Job {id} en file…", r_state:"Job {id} · {state}…",
+    r_seedstate:"{done}/{total} graines terminées…",
+    r_done:"Terminé", r_failed:"échec", r_neterr:"Erreur réseau",
+    r_risk:"⚠ motif {m} : Tg possiblement sous-estimée",
+    err_invalid:"PSMILES invalide.", err_ssh:"Erreur de connexion CRIANN.",
+    res_title:"Propriétés prédites", res_unreliable:"⚠ Fit Tg peu fiable",
+    res_seeds_note:"Moyenne sur {n} graines · ± = erreur-type σ/√N · fits fiables {r}/{n}",
+    res_perseed:"Tg par graine : {d}",
+    noprops:"Aucune propriété (job échoué ?).",
+    Tg_pred:"Tg prédite", density_300K:"Densité @300K", FFV:"Volume libre",
+    Rg_nm:"Rayon de giration", refractive_index:"Indice de réfraction", Cp_JgK:"Capacité Cp",
+    K_GPa:"Module K", solubility_delta:"Solubilité δ",
+  }
+};
+let LANG = (navigator.language||'en').toLowerCase().startsWith('fr') ? 'fr' : 'en';
+function t(k,v){ let s=(I18N[LANG]&&I18N[LANG][k]); if(s===undefined) s=I18N.en[k]; if(s===undefined) s=k;
+  if(v) for(const key in v) s=s.split('{'+key+'}').join(v[key]); return s; }
+
+const tipEl=document.createElement('div'); tipEl.className='floatip'; document.body.appendChild(tipEl);
+function applyI18n(){
+  document.documentElement.lang=LANG;
+  document.querySelectorAll('[data-i18n]').forEach(el=>{ el.textContent=t(el.dataset.i18n); });
+  document.querySelectorAll('.tip[data-tip]').forEach(el=>{ el.dataset.tipText=t(el.dataset.tip); });
+  document.getElementById('lang').value=LANG;
+}
+function setLang(l){ LANG=l; applyI18n(); validate(); }
+// info-bulle flottante (position:fixed → jamais coupée par le scroll de la sidebar)
+document.addEventListener('mouseover',e=>{ const el=e.target.closest('.tip'); if(!el) return;
+  tipEl.textContent=el.dataset.tipText||''; tipEl.style.display='block';
+  const r=el.getBoundingClientRect(); let x=r.right+8, y=r.top+r.height/2 - tipEl.offsetHeight/2;
+  if(x+tipEl.offsetWidth>window.innerWidth-8) x=r.left-tipEl.offsetWidth-8;
+  y=Math.min(Math.max(8,y), window.innerHeight-tipEl.offsetHeight-8);
+  tipEl.style.left=x+'px'; tipEl.style.top=y+'px'; });
+document.addEventListener('mouseout',e=>{ if(e.target.closest('.tip')) tipEl.style.display='none'; });
+
+/* ============================ build marker ============================ */
+console.log('%c[tgcli] front-end build 2026-06-07e — multi-seed + i18n + paramètres + info-bulles','color:#4fc3f7');
+window.addEventListener('load',()=>{ applyI18n(); validate(); });
+
+/* ============================ Ketcher / SMILES grab ============================ */
+function ketcherObj(){ try{ return document.getElementById('ketcher-frame').contentWindow.ketcher; }catch(e){ console.warn('[tgcli] accès iframe refusé:',e); return null; } }
+async function ketcherReady(tries){
+  for(let i=0;i<(tries||20);i++){ const k=ketcherObj(); if(k&&typeof k.getSmiles==='function') return k; await new Promise(r=>setTimeout(r,200)); }
+  return null;
+}
+function showValid(html){ document.getElementById('valid').innerHTML=html; }
+// Lit le MODÈLE natif de l'éditeur (k.editor.struct()) et reconstruit un KET en JS pur.
+// AUCUN appel Indigo/WASM → marche même quand WebAssembly est désactivé (LibreWolf/Firefox durci).
+function structToKet(k){
+  const st=k.editor.struct();
+  const idmap=new Map(); const atoms=[]; let n=0;
+  st.atoms.forEach((a,id)=>{ idmap.set(id,n++);
+    const o={label:a.rglabel?'R#':(a.label||'*')};
+    if(a.charge) o.charge=a.charge;
+    const ap=a.attachmentPoints||a.attpnt||0; if(ap) o.attachmentPoints=ap;
+    atoms.push(o);
+  });
+  const bonds=[];
+  st.bonds.forEach((b)=>{ if(idmap.has(b.begin)&&idmap.has(b.end))
+    bonds.push({type:b.type||1, atoms:[idmap.get(b.begin), idmap.get(b.end)]}); });
+  if(!atoms.length) throw new Error('dessin vide');
+  return JSON.stringify({root:{nodes:[{$ref:'mol0'}]}, mol0:{type:'molecule', atoms, bonds}});
+}
+// WASM dispo dans l'iframe Ketcher ? Si non, Indigo (getSmiles/getKet/getMolfile) est MORT et un appel
+// se BLOQUE sans throw → il ne faut PAS l'appeler, on lit directement le modèle natif de l'éditeur.
+function frameWasmOk(){ try{ return typeof document.getElementById('ketcher-frame').contentWindow.WebAssembly!=='undefined'; }catch(e){ return false; } }
+function withTimeout(p,ms){ return Promise.race([Promise.resolve(p), new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),ms))]); }
+
+async function grabSmiles(){
+  console.log('[tgcli] grabSmiles cliqué');
+  const k=await ketcherReady();
+  if(!k){ showValid('<span class="err">✗ '+t('g_notready')+'</span>'); return; }
+  let raw=null, ket=null;
+  if(frameWasmOk()){
+    try{ raw=await withTimeout(k.getSmiles(),4000); console.log('[tgcli] getSmiles =',raw); }
+    catch(e){ console.warn('[tgcli] getSmiles KO, repli lecture native:',e); }
+  } else {
+    console.warn('[tgcli] WebAssembly absent dans Ketcher → lecture native du dessin (sans Indigo)');
+  }
+  if(!raw||!raw.trim()){
+    try{ ket=structToKet(k); console.log('[tgcli] modèle natif lu ('+ket.length+' o)'); }
+    catch(e){ console.error('[tgcli] lecture native échouée:',e); showValid('<span class="warn">⚠ '+t('g_empty')+'</span>'); return; }
+  }
+  let d; try{ d=await postValidate(raw, ket); }
+  catch(e){ console.error('[tgcli] /api/validate a échoué:',e); showValid('<span class="err">✗ '+t('g_server')+'</span>'); return; }
+  if(!d.norm){ showValid('<span class="err">✗ '+t('g_notconvertible')+'</span>'); return; }
+  document.getElementById('smiles').value=d.norm;
+  renderValid(d);
+}
+
+/* ============================ validation ============================ */
+function val(id){ const e=document.getElementById(id); return e?e.value:''; }
+async function postValidate(s,ket){
+  return await(await fetch('/api/validate',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({smiles:s||'',ket:ket||null,tg_exp:val('tg_exp'),t_step:val('t_step')})})).json();
+}
+function renderValid(d){
+  if(!d.ok){
+    const map={empty:'v_empty',unparsable:'v_unparsable',attach:'v_attach'};
+    showValid('<span class="err">✗ '+t(map[d.code]||'v_unparsable',{n:d.n_attach})+'</span>');
+    document.getElementById('go').disabled=true; return;
+  }
+  document.getElementById('go').disabled=false;
+  const okmsg = (d.n_heavy==null) ? t('v_ok_nordkit') : t('v_ok',{n:d.n_heavy});
+  let h='<span class="ok">✓ '+okmsg+'</span>';
+  if(d.win_lo!=null) h+='<br><span class="dim">'+t('v_window',{lo:d.win_lo,hi:d.win_hi,n:d.paliers})+'</span>';
+  if(d.risk&&d.risk.length){ const names=d.risk.map(r=>t('risk_'+r)).join(', ');
+    h+='<br><span class="pill">⚠ '+t('v_risk',{m:names})+'</span>'; }
+  showValid(h);
+}
+let vt;
+function validate(){
+  clearTimeout(vt);
+  vt=setTimeout(async()=>{ let d; try{ d=await postValidate(val('smiles')); }catch(e){ return; } renderValid(d); },250);
+}
+
+/* ============================ run / logs / results ============================ */
+const PROPS=[["Tg_pred","K"],["density_300K","g/cm³"],["FFV",""],["Rg_nm","nm"],
+  ["refractive_index",""],["Cp_JgK","J/g/K"],["K_GPa","GPa"],["solubility_delta","MPa^½"]];
+
+function setStatus(text,cls){ document.getElementById('status').textContent=text;
+  const dot=document.getElementById('dot'); dot.className='dot'+(cls?' '+cls:''); }
+function logln(text,cls){ const l=document.getElementById('log');
+  l.insertAdjacentHTML('beforeend',(cls?'<span class="'+cls+'">'+text+'</span>':escapeHtml(text))+'\n'); l.scrollTop=l.scrollHeight; }
+function escapeHtml(s){ return (''+s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+function backToDraw(){ document.getElementById('log-view').classList.add('hidden');
+  document.getElementById('draw-view').classList.remove('hidden');
+  document.getElementById('newbtn').classList.add('hidden'); setStatus(t('status_start')); }
+
+async function run(){
+  const go=document.getElementById('go'); go.disabled=true;
+  document.getElementById('draw-view').classList.add('hidden');
+  document.getElementById('log-view').classList.remove('hidden');
+  document.getElementById('newbtn').classList.remove('hidden');
+  document.getElementById('log').innerHTML=''; document.getElementById('results').classList.add('hidden');
+  setStatus(t('r_submitting'),'run'); logln(t('r_submitting'),'dim');
+  const body={smiles:val('smiles'), tg_exp:val('tg_exp'), partition:val('partition'),
+    seeds:val('seeds'), n_units:val('n_units'), box_a:val('box_a'), t_step:val('t_step'),
+    equil_ps:val('equil_ps'), sample_ps:val('sample_ps'), time:val('time'),
+    mech:document.getElementById('mech').checked, shear:document.getElementById('shear').checked,
+    sync:document.getElementById('sync').checked};
+  let res; try{ res=await(await fetch('/api/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json(); }
+  catch(e){ logln(t('r_neterr'),'err'); setStatus(t('r_failed')); go.disabled=false; return; }
+  if(res.error){ const m=res.error==='ssh'?t('err_ssh'):t('err_invalid');
+    logln('✗ '+m+(res.detail?' '+res.detail:''),'err'); setStatus(t('r_failed')); go.disabled=false; return; }
+  if(res.risk&&res.risk.length){ const names=res.risk.map(r=>t('risk_'+r)).join(','); logln(t('r_risk',{m:names}),'warn'); }
+
+  let es;
+  if(res.multi){                                   // ── multi-seed : N jobs → moyenne ± erreur-type ──
+    const ids=res.jobs.map(j=>j.jobid).join(', ');
+    logln(t('r_seeds_submitted',{n:res.jobs.length,ids:ids}),'ok');
+    setStatus(t('r_seedstate',{done:0,total:res.jobs.length}),'run');
+    es=new EventSource('/api/stream_seeds?jobs='+encodeURIComponent(JSON.stringify(res.jobs)));
+  } else {                                         // ── single-seed ──
+    logln(t('r_submitted',{id:res.jobid}),'ok'); setStatus(t('r_queued',{id:res.jobid}),'run');
+    es=new EventSource('/api/stream/'+res.jobid+'?out_rel='+encodeURIComponent(res.out_rel));
+  }
+  es.onmessage=(ev)=>{ const m=JSON.parse(ev.data);
+    if(m.log!==undefined) logln(m.log);
+    else if(m.seedstate) setStatus(t('r_seedstate',{done:m.seedstate.done,total:m.seedstate.total}),'run');
+    else if(m.state) setStatus(t('r_state',{id:res.jobid,state:m.state}),'run');
+    else if(m.done){ es.close(); go.disabled=false; setStatus(t('r_done'),'ok'); render(m.props,m.per_seed_tg); } };
+  es.onerror=()=>{ es.close(); go.disabled=false; };
+}
+function render(p,perSeed){
+  const r=document.getElementById('results'); r.classList.remove('hidden');
+  if(!p){ r.innerHTML='<span class="err">'+t('noprops')+'</span>'; return; }
+  let h='<h3>'+t('res_title')+'</h3><table>';
+  for(const [k,u] of PROPS){ if(p[k]==null) continue; const ci=p[k+'_ci'];
+    h+='<tr><td>'+t(k)+'</td><td class="v">'+p[k]+(ci?' ± '+ci:'')+'</td><td class="dim">'+u+'</td></tr>'; }
+  h+='</table>';
+  if(p.n_seeds>1) h+='<div class="dim" style="margin-top:8px;font-size:12px">'+t('res_seeds_note',{n:p.n_seeds,r:p.n_reliable})+'</div>';
+  if(perSeed){ const d=Object.keys(perSeed).map(s=>'s'+s+'='+perSeed[s]).join(', ');
+    h+='<div class="dim" style="font-size:12px">'+t('res_perseed',{d:d})+'</div>'; }
+  if(p.fit_reliable===false) h+='<div class="warn" style="margin-top:8px;font-size:12px">'+t('res_unreliable')+(p.fit_recommendation?' — '+escapeHtml(p.fit_recommendation):'')+'</div>';
+  r.innerHTML=h;
+}
+</script>
+</body>
+</html>
