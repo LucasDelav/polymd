@@ -67,17 +67,34 @@ def build_oligomer(repeat_smiles: str, n_units: int, tacticity: str = "atactic")
     mol = rw.GetMol()
     Chem.SanitizeMol(mol)
 
-    # Tacticité : assigne la configuration des centres chiraux du squelette, ORDONNÉS le long
-    # de la chaîne (par indice d'atome ≈ ordre de construction séquentiel). iso = tous CW ;
-    # syndio = CW/CCW alternés. L'embedding 3D respecte ces tags.
-    if tacticity in ("iso", "syndio"):
-        centers = sorted(i for i, _ in Chem.FindMolChiralCenters(
-            mol, includeUnassigned=True, useLegacyImplementation=False))
-        for k, ci in enumerate(centers):
-            tag = Chem.ChiralType.CHI_TETRAHEDRAL_CW
-            if tacticity == "syndio" and k % 2 == 1:
-                tag = Chem.ChiralType.CHI_TETRAHEDRAL_CCW
-            mol.GetAtomWithIdx(ci).SetChiralTag(tag)
+    # Tacticité : assigne une configuration aux centres chiraux NON DÉFINIS, ORDONNÉS le long de
+    # la chaîne (par indice d'atome ≈ ordre de construction séquentiel). iso = tous CW ; syndio =
+    # CW/CCW alternés ; atactic = aléatoire mais DÉFINI (graine fixe → reproductible).
+    #
+    # ON PRÉSERVE la stéréo DÉJÀ DÉFINIE (ex. dessinée dans Ketcher → @/@@ dans le PSMILES, conservés
+    # par cli.normalize_psmiles) : seuls les centres laissés indéterminés ('?') sont remplis. Ainsi
+    # un motif stéréo-spécifié garde sa chiralité ; un motif sans stéréo est complété (atactic).
+    #
+    # PIÈGE CORRIGÉ (hang infini) : tout centre INDÉFINI restant ferait échantillonner la chiralité
+    # par ETKDG ; sur un motif à cycles FUSIONNÉS (ex. acétal bicyclique *OCC1OC2OC(C)(C)OC2C1*) il
+    # tire alors des jonctions de cycle *trans* géométriquement impossibles à chacune des ~N unités
+    # → la distance-geometry échoue et re-tente sans fin → embed bloqué à 100 % CPU en C++ (le timeout
+    # SIGALRM de l'appelant est impuissant face à un appel C++ qui ne rend pas la main). En remplissant
+    # tous les '?', on supprime cet échantillonnage interne → embed déterministe et fini.
+    undefined = [i for i, lab in Chem.FindMolChiralCenters(
+        mol, includeUnassigned=True, useLegacyImplementation=False) if lab == "?"]
+
+    def _assign_stereo(attempt: int) -> None:
+        rng = np.random.default_rng(RANDOM_SEED + attempt)
+        for k, ci in enumerate(sorted(undefined)):
+            if tacticity == "iso":
+                cw = True
+            elif tacticity == "syndio":
+                cw = (k % 2 == 0)
+            else:                                  # atactic : aléatoire mais défini
+                cw = bool(rng.integers(2))
+            mol.GetAtomWithIdx(ci).SetChiralTag(
+                Chem.ChiralType.CHI_TETRAHEDRAL_CW if cw else Chem.ChiralType.CHI_TETRAHEDRAL_CCW)
         Chem.AssignStereochemistry(mol, cleanIt=True, force=True)
 
     mol = Chem.AddHs(mol)
@@ -90,8 +107,21 @@ def build_oligomer(repeat_smiles: str, n_units: int, tacticity: str = "atactic")
     params = AllChem.ETKDGv3()
     params.randomSeed = RANDOM_SEED
     params.useRandomCoords = True
-    if AllChem.EmbedMolecule(mol, params) != 0:        # échec d'embed → réessaie plus d'itérations
-        params.maxIterations = 2000
+    params.maxIterations = 2000
+    # Un tirage stéréo atactic peut tomber sur une combinaison de jonctions impossible → embed qui
+    # échoue (rc != 0). On retente avec une AUTRE graine stéréo, puis on se rabat sur iso (tout-CW,
+    # toujours embeddable) en dernier recours. iso/syndio sont déterministes : une seule tentative.
+    n_try = 1 if tacticity in ("iso", "syndio") else 4
+    embedded = False
+    for attempt in range(n_try):
+        _assign_stereo(attempt)
+        if AllChem.EmbedMolecule(mol, params) == 0:
+            embedded = True
+            break
+    if not embedded:                               # repli robuste : centres indéfinis → tout-CW (iso)
+        for ci in undefined:
+            mol.GetAtomWithIdx(ci).SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CW)
+        Chem.AssignStereochemistry(mol, cleanIt=True, force=True)
         AllChem.EmbedMolecule(mol, params)
     AllChem.MMFFOptimizeMolecule(mol, maxIters=200)
     return mol
