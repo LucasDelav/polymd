@@ -39,3 +39,4 @@ id_rsa*
 .idea/
 .vscode/
 *.swp
+tg_prior_model.joblib
