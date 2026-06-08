@@ -425,56 +425,90 @@ def main():
                 simT.context.setPeriodicBoxVectors(*(box0 * unit.nanometer))
                 simT.context.setPositions(pos0 * unit.nanometer)
                 simT.context.setVelocitiesToTemperature(mech_T * unit.kelvin, 7)
-                # Déformations jusqu'à ~3% : à 1% l'incrément de contrainte (E·ε) était ~du niveau du
-                # bruit de σ → SNR~1 (pente = bruit). Signal ∝ ε → on étend la plage. NB : reste sous le
-                # seuil d'écoulement (~3-5% pour un verre vitreux) pour garder le régime ÉLASTIQUE linéaire.
-                strains = [float(x) for x in os.environ.get("TENSILE_STRAINS",
-                                                            "0.0,0.005,0.01,0.015,0.02,0.025,0.03").split(",")]
-                eq_ps = float(os.environ.get("TENSILE_EQUIL_PS", "40"))   # relaxation latérale par palier
-                nfr = int(os.environ.get("TENSILE_FRAMES", "30"))        # frames d'échantillonnage (bruit ∝ 1/√n)
                 dlt = 1e-4                                               # δ de la différence finie σ
-                sig, lxm = [], []
-                for ez in strains:
-                    cur = simT.context.getState(getPositions=True)
-                    b = cur.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer)
-                    p = cur.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
-                    sc = Lz0 * (1.0 + ez) / b[2, 2]                      # rescale affine z vers la cible
-                    b[2, 2] = Lz0 * (1.0 + ez); p[:, 2] *= sc
-                    simT.context.setPeriodicBoxVectors(*(b * unit.nanometer))
-                    simT.context.setPositions(p * unit.nanometer)
-                    simT.step(int(eq_ps * spp))                         # x,y relaxent à 1 bar, z fixé
+                eq_ps = float(os.environ.get("TENSILE_EQUIL_PS", "40"))   # équilibration latérale à ε=0
+                mode = os.environ.get("TENSILE_MODE", "palier")          # 'palier' (quasi-statique) | 'ramp'
+
+                def _sig_lx():
+                    # σ_zz (FD énergie ±δ, rescale affine z) + Lx à l'état COURANT, SANS avancer le temps.
+                    s = simT.context.getState(getPositions=True)
+                    bb = s.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer)
+                    pp = s.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
+                    V = float(np.linalg.det(bb)) * 1e-27
+                    u = []
+                    for dd in (+dlt, -dlt):
+                        bd = bb.copy(); bd[2, 2] *= (1.0 + dd); pd = pp.copy(); pd[:, 2] *= (1.0 + dd)
+                        simT.context.setPeriodicBoxVectors(*(bd * unit.nanometer)); simT.context.setPositions(pd * unit.nanometer)
+                        u.append(simT.context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole))
+                    simT.context.setPeriodicBoxVectors(*(bb * unit.nanometer)); simT.context.setPositions(pp * unit.nanometer)
+                    return (u[0] - u[1]) / (2.0 * dlt) * 1000.0 / 6.02214076e23 / V / 1e9, float(bb[0, 0])  # GPa, nm
+
+                def _sample(nfr, step_ps=2.0):                           # ⟨σ_zz⟩,⟨Lx⟩ en avançant entre frames
                     szs, lxs = [], []
-                    for _ in range(nfr):                               # ⟨σ_zz⟩, ⟨Lx⟩
-                        simT.step(2 * spp)
-                        s = simT.context.getState(getPositions=True)
-                        bb = s.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer)
-                        pp = s.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
-                        V = float(np.linalg.det(bb)) * 1e-27            # m³
-                        lxs.append(float(bb[0, 0]))
-                        u = []
-                        for dd in (+dlt, -dlt):                         # U(z·(1±δ)), rescale affine z
-                            bd = bb.copy(); bd[2, 2] *= (1.0 + dd)
-                            pd = pp.copy(); pd[:, 2] *= (1.0 + dd)
-                            simT.context.setPeriodicBoxVectors(*(bd * unit.nanometer))
-                            simT.context.setPositions(pd * unit.nanometer)
-                            u.append(simT.context.getState(getEnergy=True).getPotentialEnergy()
-                                     .value_in_unit(unit.kilojoule_per_mole))
-                        simT.context.setPeriodicBoxVectors(*(bb * unit.nanometer))   # restaure l'état
-                        simT.context.setPositions(pp * unit.nanometer)
-                        szs.append((u[0] - u[1]) / (2.0 * dlt) * 1000.0 / 6.02214076e23 / V / 1e9)  # GPa
-                    sig.append(float(np.mean(szs))); lxm.append(float(np.mean(lxs)))
-                # RÉFÉRENCES au palier ε_zz=0 ÉQUILIBRÉ (pas la boîte d'avant-bascule du barostat) :
-                #   ε_xx = Lx/Lx(ε=0) − 1 ; on retire aussi σ_zz(ε=0) (contrainte résiduelle gelée) pour
-                #   ne fitter que l'INCRÉMENT élastique. Ça ne change pas la pente, mais rend la courbe lisible.
-                Lx_ref = lxm[0]; sig0 = sig[0]
-                exx = [lx / Lx_ref - 1.0 for lx in lxm]
-                sig = [s - sig0 for s in sig]
-                ez_a = np.array(strains)
-                print(f"     [diag] ε_zz={[round(x,4) for x in strains]}", flush=True)
-                print(f"     [diag] σ_zz(GPa)={[round(x,3) for x in sig]}", flush=True)
-                print(f"     [diag] ε_xx={[round(x,5) for x in exx]}", flush=True)
-                E = float(np.polyfit(ez_a, np.array(sig), 1)[0])          # pente σ_zz/ε_zz (ROBUSTE)
-                nu_box = float(-np.polyfit(ez_a, np.array(exx), 1)[0])    # ν par dimensions de boîte (BRUITÉ → diag)
+                    for _ in range(nfr):
+                        simT.step(int(step_ps * spp)); sg, lx = _sig_lx(); szs.append(sg); lxs.append(lx)
+                    return float(np.mean(szs)), float(np.mean(lxs))
+
+                if mode == "ramp":
+                    # RAMPE CONTINUE à vitesse contrôlée ε̇ (le barostat latéral reste actif → traction
+                    # uniaxiale vraie). C'est le protocole de réf (polyimides) : E réaliste aux vitesses MD,
+                    # et la PENTE E vs log(ε̇) donne la correction de vitesse (analogue mécanique du ÷1.50 Tg).
+                    rate = float(os.environ.get("TENSILE_RATE", "1e-6"))     # ε̇ par fs
+                    eps_max = float(os.environ.get("TENSILE_EPS_MAX", "0.04"))
+                    cap = float(os.environ.get("TENSILE_ELASTIC_CAP", "0.02"))   # fit du module sous ce seuil
+                    nsamp = int(os.environ.get("TENSILE_RAMP_SAMPLES", "40"))
+                    simT.step(int(eq_ps * spp))                              # équilibre à ε=0
+                    sig0, Lx_ref = _sample(6)
+                    Lz_ref = float(simT.context.getState().getPeriodicBoxVectors(asNumpy=True)
+                                   .value_in_unit(unit.nanometer)[2, 2])
+                    deps = eps_max / nsamp                                   # incrément de strain par échantillon
+                    chunk = max(1, int(round(deps / (rate * DT))))          # nb de pas MD/incrément → FIXE la vitesse
+                    eps_l, sig_l, exx_l = [0.0], [0.0], [0.0]
+                    for _k in range(nsamp):
+                        st = simT.context.getState(getPositions=True)
+                        b = st.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer)
+                        p = st.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
+                        b[2, 2] *= (1.0 + deps); p[:, 2] *= (1.0 + deps)
+                        simT.context.setPeriodicBoxVectors(*(b * unit.nanometer)); simT.context.setPositions(p * unit.nanometer)
+                        simT.step(chunk)                                    # intègre à la vitesse voulue
+                        sg, lx = _sig_lx()
+                        eps_l.append(float(b[2, 2]) / Lz_ref - 1.0); sig_l.append(sg - sig0); exx_l.append(lx / Lx_ref - 1.0)
+                    ez_a = np.array(eps_l); sig = np.array(sig_l); exx = np.array(exx_l)
+                    m = ez_a <= cap
+                    E = float(np.polyfit(ez_a[m], sig[m], 1)[0])
+                    nu_box = float(-np.polyfit(ez_a[m], exx[m], 1)[0])
+                    print(f"     [ramp ε̇={rate:.0e}/fs, {int(chunk*DT)}fs/incr] {int(m.sum())} pts ≤{cap:.0%} → E={E:.2f} GPa", flush=True)
+                    if eps_max >= 0.1:    # C1 : grande déformation → SEUIL D'ÉCOULEMENT (pic de σ)
+                        # NB : en bulk PÉRIODIQUE (pas de surface/défaut), le matériau N'A PAS de rupture
+                        # fragile — il atteint un pic (limite élastique/écoulement) puis flue/cavite. On
+                        # rapporte donc σ_y, ε_y (écoulement DUCTILE), PAS un strain-at-break fragile.
+                        iy = int(np.argmax(sig)); ductile = bool(iy < len(sig) - 2)
+                        props["yield_stress_GPa"] = round(float(sig[iy]), 3)
+                        props["yield_strain"] = round(float(ez_a[iy]), 3)
+                        props["mech_note"] = ("seuil d'écoulement (bulk périodique → ductile, "
+                                              "PAS rupture fragile)")
+                        print(f"     [C1] seuil : σ_y={sig[iy]:.3f} GPa à ε_y={ez_a[iy]:.1%}"
+                              f" {'(pic franc)' if ductile else '(pas de pic net dans la plage)'}", flush=True)
+                else:
+                    # PALIERS quasi-statiques : on relaxe eq_ps à chaque ε puis on échantillonne (limite
+                    # de vitesse → 0 ; donne le module RELAXÉ, borne basse). Plage ≤3% pour rester élastique.
+                    strains = [float(x) for x in os.environ.get("TENSILE_STRAINS",
+                                                                "0.0,0.005,0.01,0.015,0.02,0.025,0.03").split(",")]
+                    nfr = int(os.environ.get("TENSILE_FRAMES", "30"))
+                    sig_raw, lx_raw = [], []
+                    for ez in strains:
+                        st = simT.context.getState(getPositions=True)
+                        b = st.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer)
+                        p = st.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
+                        sc = Lz0 * (1.0 + ez) / b[2, 2]; b[2, 2] = Lz0 * (1.0 + ez); p[:, 2] *= sc
+                        simT.context.setPeriodicBoxVectors(*(b * unit.nanometer)); simT.context.setPositions(p * unit.nanometer)
+                        simT.step(int(eq_ps * spp))
+                        sg, lx = _sample(nfr); sig_raw.append(sg); lx_raw.append(lx)
+                    Lx_ref = lx_raw[0]; ez_a = np.array(strains)
+                    sig = np.array([s - sig_raw[0] for s in sig_raw]); exx = np.array([lx / Lx_ref - 1.0 for lx in lx_raw])
+                    E = float(np.polyfit(ez_a, sig, 1)[0]); nu_box = float(-np.polyfit(ez_a, exx, 1)[0])
+                    print(f"     [diag] σ_zz(GPa)={[round(float(x),3) for x in sig]}", flush=True)
+                    print(f"     [diag] ε_xx={[round(float(x),5) for x in exx]}", flush=True)
                 # ν, G DÉRIVÉS de E (traction) + K (fluctuations de volume) — les DEUX grandeurs robustes.
                 # Évite le ν par dimensions de boîte, intrinsèquement bruité pour un verre rigide.
                 #   ν = (3K−E)/(6K) ; G = 3KE/(9K−E).   (E=3K(1−2ν) ; E=2G(1+ν))
