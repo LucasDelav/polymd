@@ -6,7 +6,8 @@ SORTIES :
               MAE ~26 K sur 14 polymères, sans dépendance chimique ; cf project-md-pipeline).
   density_300K, CTE_glass : densité et dilatation thermique (gratuit, depuis ρ(T)).
   K_GPa     : module de compression (fluctuations de volume — FIABLE).
-  G/E/ν     : SHEAR=1 seulement, et EXPÉRIMENTAL/NON VALIDÉ (energy-strain trop bruité — à refaire).
+  E/ν/G     : traction uniaxiale stress-strain (latéral relaxé) — MECH_TENSILE=1 (défaut). Cross-check
+              interne K=E/(3(1−2ν)) vs K_fluct. (Remplace l'ancien energy-strain cassé.)
 
 MÉTHODE : build compact + OpenFF Sage + HMR 4fs → compression → fonte → refroidissement PAR PALIERS
 (P1 : 20 K/palier, 100+50 ps) sur fenêtre étroite centrée sur 1.5×Tg_exp → fit hyperbolique de ρ(T)
@@ -347,13 +348,17 @@ def main():
              "fit_direction": rec["direction"] if rec else None,
              "fit_recommendation": rec["message"] if rec else None}
 
-    # ─────────────── MÉCANIQUE (sur le verre final, T_low) ───────────────
+    # ─────────────── MÉCANIQUE (sur le verre à MECH_T, défaut 300 K) ───────────────
+    # On évalue K/E/ν à 300 K (T ambiante = standard des modules reportés), BIEN sous Tg : à t_low
+    # (souvent ~Tg−50K) le verre est mou et s'écoule tôt (E sous-estimé, courbe σ(ε) qui sature).
+    # On trempe donc d'abord de t_low → MECH_T.
     if do_mech:
-        kT = 1.380649e-23 * float(t_low)            # J
-        # K via fluctuations de volume (NPT court au verre).
+        mech_T = float(os.environ.get("MECH_T", "300"))
+        kT = 1.380649e-23 * mech_T                  # J
+        # K via fluctuations de volume (NPT court au verre, à MECH_T).
         with P.block("10_K_volfluct"):
-            ig.setTemperature(t_low * unit.kelvin); sim.context.setParameter(baro.Temperature(), t_low)
-            sim.step(20 * spp)                       # ré-équilibre au verre
+            ig.setTemperature(mech_T * unit.kelvin); sim.context.setParameter(baro.Temperature(), mech_T)
+            sim.step(60 * spp)                       # trempe t_low→MECH_T + ré-équilibre (densifie)
             Vs = []
             for _ in range(40):                      # NB: K par fluctuations de volume = IMPRÉCIS/dispersé
                 sim.step(2 * spp)                    # (sensible à la longueur de sampling) → flaggé ⚠ dans la CLI
@@ -388,53 +393,100 @@ def main():
         # systématique ~−20% ; calibré sur 8 polymères → MAE 20%→10%. (cf Cp÷2.27, Tg÷1.50.)
         props["solubility_delta"] = round(delta * 1.25, 1)
 
-        # G/E/ν : EXPÉRIMENTAL & NON VALIDÉ — l'energy-strain à T finie est trop bruité (ΔPE noyé
-        # dans le bruit thermique) → valeurs FAUSSES (cf TODO : refaire en stress-strain/fluctuations
-        # de déformation). N'est calculé que sur SHEAR=1, et sorti sous des clés _EXPERIMENTAL.
-        if os.environ.get("SHEAR", "0") == "1":
-            print("  ⚠️  G/E/ν (cisaillement) : EXPÉRIMENTAL, NON VALIDÉ — ne pas utiliser tel quel", flush=True)
-            with P.block("11_shear_deform_EXPERIMENTAL"):
-                st = sim.context.getState(getPositions=True)
-                pos0 = st.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
-                box0 = st.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer)
-                V0 = float(np.linalg.det(box0)) * 1e-27  # m³
-                strains = [float(x) for x in os.environ.get("SHEAR_STRAINS", "0.005,0.01").split(",")]
-                shear_ps = float(os.environ.get("SHEAR_PS", "20"))
-                for idx in reversed(range(omm_system.getNumForces())):   # retire le barostat → NVT pur
+        # E / ν / G : ESSAI DE TRACTION UNIAXIALE (stress-strain). Remplace l'energy-strain cassé.
+        # On étire la boîte selon z par PALIERS de déformation ε_zz, en laissant x,y RELAXER à 1 bar
+        # (barostat ANISOTROPE, z non scalé) → essai de traction réel (contrainte uniaxiale). À chaque
+        # palier on mesure :
+        #   σ_zz = ⟨∂U/∂ε_zz⟩ / V   — la CONTRAINTE (réponse en O(ε), 1ʳᵉ dérivée) via différence finie
+        #         d'énergie sur un rescale affine ±δ en z. C'est tout l'intérêt vs l'ancienne méthode :
+        #         on lit une 1ʳᵉ dérivée (bon SNR), pas la COURBURE de ⟨E⟩(γ) (2ᵉ dérivée, noyée dans kT).
+        #         Le terme cinétique (~ρkT/axe) est ~constant en ε → s'annule dans la PENTE.
+        #   ε_xx = ⟨Lx⟩/Lx(ε=0) − 1   — contraction latérale (gardée en simple DIAGNOSTIC).
+        # E = pente(σ_zz vs ε_zz). Puis ν et G DÉRIVÉS de E (traction) + K (fluctuations de volume),
+        # les deux grandeurs robustes : ν=(3K−E)/(6K), G=3KE/(9K−E). On évite le ν par dimensions de
+        # boîte (trop bruité sur un verre rigide : sa variation par 1% axial n'est que ~ν% de Lx).
+        if os.environ.get("MECH_TENSILE", "1") == "1":
+            print("  → E/ν par traction uniaxiale (stress-strain, latéral relaxé)…", flush=True)
+            with P.block("11_tensile"):
+                from openmm import MonteCarloAnisotropicBarostat, Vec3
+                for idx in reversed(range(omm_system.getNumForces())):   # retire le barostat isotrope
                     if isinstance(omm_system.getForce(idx), MonteCarloBarostat):
                         omm_system.removeForce(idx)
-                from openmm import Vec3
-                tri = box0.copy()                   # défaut TRICLINIQUE (sinon rect→triclinic interdit en vol)
-                tri[1, 0] += 1e-4 * tri[1, 1]; tri[2, 0] += 1e-4 * tri[2, 2]; tri[2, 1] += 1e-4 * tri[2, 2]
-                omm_system.setDefaultPeriodicBoxVectors(*[Vec3(*r) * unit.nanometer for r in tri])
-                igN = LangevinMiddleIntegrator(t_low * unit.kelvin, 1.0 / unit.picosecond, DT * unit.femtoseconds)
-                simN = Simulation(omm_top, omm_system, igN, plat)   # NVT (box fixe, cisaillement imposé)
-                C44 = []
-                for (a, b) in [(0, 1), (0, 2), (1, 2)]:             # ε_xy, ε_xz, ε_yz
-                    Es = []
-                    for g in [0.0] + strains:
-                        # gradient de déformation F = I + γ·e_a⊗e_b → v'_a = v_a + γ·v_b (préserve
-                        # la forme triangulaire inférieure exigée par OpenMM ; 1er vecteur ∥ x).
-                        H = box0.copy(); H[:, a] += g * H[:, b]
-                        p = pos0.copy(); p[:, a] += g * pos0[:, b]
-                        simN.context.setPeriodicBoxVectors(*(H * unit.nanometer))
-                        simN.context.setPositions(p * unit.nanometer)
-                        simN.context.setVelocitiesToTemperature(t_low * unit.kelvin, 7)
-                        simN.step(int(shear_ps * spp))            # équilibre à la déformation
-                        pes = []
-                        for _ in range(5):                        # moyenne ⟨PE⟩
-                            simN.step(2 * spp)
-                            pes.append(simN.context.getState(getEnergy=True).getPotentialEnergy()
-                                       .value_in_unit(unit.kilojoule_per_mole))
-                        Es.append(float(np.mean(pes)))
-                    c = np.polyfit(np.array([0.0] + strains), np.array(Es), 2)[0]   # ⟨E⟩≈½C44·V·γ²
-                    C44.append(2 * c * 1000 / 6.02214076e23 / V0 / 1e9)             # GPa
-                G = float(np.mean(C44)); K = float(K_fluct)
-                E = 9 * K * G / (3 * K + G) if (3 * K + G) else None
-                nu = (3 * K - 2 * G) / (2 * (3 * K + G)) if (3 * K + G) else None
-            props.update({"G_GPa_EXPERIMENTAL": round(G, 2),
-                          "E_GPa_EXPERIMENTAL": round(E, 2) if E else None,
-                          "poisson_EXPERIMENTAL": round(nu, 3) if nu else None})
+                # barostat anisotrope : relaxe X,Y à 1 bar, NE scale PAS Z (piloté par nous).
+                abaro = MonteCarloAnisotropicBarostat(Vec3(1.0, 1.0, 1.0) * unit.bar,
+                                                      mech_T * unit.kelvin, True, True, False, 25)
+                omm_system.addForce(abaro)
+                igT = LangevinMiddleIntegrator(mech_T * unit.kelvin, 1.0 / unit.picosecond, DT * unit.femtoseconds)
+                simT = Simulation(omm_top, omm_system, igT, plat)
+                st0 = sim.context.getState(getPositions=True)
+                box0 = st0.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer)
+                pos0 = st0.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
+                Lz0 = float(box0[2, 2]); Lx0 = float(box0[0, 0])
+                simT.context.setPeriodicBoxVectors(*(box0 * unit.nanometer))
+                simT.context.setPositions(pos0 * unit.nanometer)
+                simT.context.setVelocitiesToTemperature(mech_T * unit.kelvin, 7)
+                # Déformations jusqu'à ~3% : à 1% l'incrément de contrainte (E·ε) était ~du niveau du
+                # bruit de σ → SNR~1 (pente = bruit). Signal ∝ ε → on étend la plage. NB : reste sous le
+                # seuil d'écoulement (~3-5% pour un verre vitreux) pour garder le régime ÉLASTIQUE linéaire.
+                strains = [float(x) for x in os.environ.get("TENSILE_STRAINS",
+                                                            "0.0,0.005,0.01,0.015,0.02,0.025,0.03").split(",")]
+                eq_ps = float(os.environ.get("TENSILE_EQUIL_PS", "40"))   # relaxation latérale par palier
+                nfr = int(os.environ.get("TENSILE_FRAMES", "30"))        # frames d'échantillonnage (bruit ∝ 1/√n)
+                dlt = 1e-4                                               # δ de la différence finie σ
+                sig, lxm = [], []
+                for ez in strains:
+                    cur = simT.context.getState(getPositions=True)
+                    b = cur.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer)
+                    p = cur.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
+                    sc = Lz0 * (1.0 + ez) / b[2, 2]                      # rescale affine z vers la cible
+                    b[2, 2] = Lz0 * (1.0 + ez); p[:, 2] *= sc
+                    simT.context.setPeriodicBoxVectors(*(b * unit.nanometer))
+                    simT.context.setPositions(p * unit.nanometer)
+                    simT.step(int(eq_ps * spp))                         # x,y relaxent à 1 bar, z fixé
+                    szs, lxs = [], []
+                    for _ in range(nfr):                               # ⟨σ_zz⟩, ⟨Lx⟩
+                        simT.step(2 * spp)
+                        s = simT.context.getState(getPositions=True)
+                        bb = s.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer)
+                        pp = s.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
+                        V = float(np.linalg.det(bb)) * 1e-27            # m³
+                        lxs.append(float(bb[0, 0]))
+                        u = []
+                        for dd in (+dlt, -dlt):                         # U(z·(1±δ)), rescale affine z
+                            bd = bb.copy(); bd[2, 2] *= (1.0 + dd)
+                            pd = pp.copy(); pd[:, 2] *= (1.0 + dd)
+                            simT.context.setPeriodicBoxVectors(*(bd * unit.nanometer))
+                            simT.context.setPositions(pd * unit.nanometer)
+                            u.append(simT.context.getState(getEnergy=True).getPotentialEnergy()
+                                     .value_in_unit(unit.kilojoule_per_mole))
+                        simT.context.setPeriodicBoxVectors(*(bb * unit.nanometer))   # restaure l'état
+                        simT.context.setPositions(pp * unit.nanometer)
+                        szs.append((u[0] - u[1]) / (2.0 * dlt) * 1000.0 / 6.02214076e23 / V / 1e9)  # GPa
+                    sig.append(float(np.mean(szs))); lxm.append(float(np.mean(lxs)))
+                # RÉFÉRENCES au palier ε_zz=0 ÉQUILIBRÉ (pas la boîte d'avant-bascule du barostat) :
+                #   ε_xx = Lx/Lx(ε=0) − 1 ; on retire aussi σ_zz(ε=0) (contrainte résiduelle gelée) pour
+                #   ne fitter que l'INCRÉMENT élastique. Ça ne change pas la pente, mais rend la courbe lisible.
+                Lx_ref = lxm[0]; sig0 = sig[0]
+                exx = [lx / Lx_ref - 1.0 for lx in lxm]
+                sig = [s - sig0 for s in sig]
+                ez_a = np.array(strains)
+                print(f"     [diag] ε_zz={[round(x,4) for x in strains]}", flush=True)
+                print(f"     [diag] σ_zz(GPa)={[round(x,3) for x in sig]}", flush=True)
+                print(f"     [diag] ε_xx={[round(x,5) for x in exx]}", flush=True)
+                E = float(np.polyfit(ez_a, np.array(sig), 1)[0])          # pente σ_zz/ε_zz (ROBUSTE)
+                nu_box = float(-np.polyfit(ez_a, np.array(exx), 1)[0])    # ν par dimensions de boîte (BRUITÉ → diag)
+                # ν, G DÉRIVÉS de E (traction) + K (fluctuations de volume) — les DEUX grandeurs robustes.
+                # Évite le ν par dimensions de boîte, intrinsèquement bruité pour un verre rigide.
+                #   ν = (3K−E)/(6K) ; G = 3KE/(9K−E).   (E=3K(1−2ν) ; E=2G(1+ν))
+                K = float(K_fluct)
+                nu = (3.0 * K - E) / (6.0 * K) if K else None
+                G = 3.0 * K * E / (9.0 * K - E) if (9.0 * K - E) else None
+            props.update({"E_GPa": round(E, 2), "poisson": round(nu, 3) if nu is not None else None,
+                          "G_GPa": round(G, 2) if G else None,
+                          "poisson_boxdiag": round(nu_box, 3)})
+            print(f"     E={E:.2f} GPa (traction) | K={K:.2f} GPa (vol.fluct) → ν={nu:.3f} G={G:.2f} GPa"
+                  f" | ν_boxdiag={nu_box:.3f}",
+                  flush=True)
 
     print("\n=== PROPRIÉTÉS ===")
     print(json.dumps(props, indent=1))
