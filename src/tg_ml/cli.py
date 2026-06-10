@@ -517,8 +517,11 @@ def effective_window(env: dict, t_step: float) -> tuple[float, float, int]:
 
 
 def _collect_env(smiles, box_a, n_units, t_step, equil_ps, sample_ps,
-                 mech, shear, cool_indep) -> dict:
-    """Paramètres NON liés à la fenêtre de température. N'inclut que ceux explicitement fixés."""
+                 mech, tensile=False, cool_indep=False, dielectric=False) -> dict:
+    """Paramètres NON liés à la fenêtre de température. N'inclut que ceux explicitement fixés.
+    tensile/dielectric = propriétés OPT-IN coûteuses (cases à cocher webapp) :
+      tensile → MECH_TENSILE=1 (module d'Young E/ν/G, +~10-15 min) ;
+      dielectric → DIELECTRIC=1 (diélectrique statique + auto-diffusion, sampling long, +~10-30 min)."""
     env = {"SMILES": smiles}
     opt = {"BOX_A": box_a, "N_UNITS": n_units, "T_STEP": t_step,
            "EQUIL_PS": equil_ps, "SAMPLE_PS": sample_ps}
@@ -527,8 +530,10 @@ def _collect_env(smiles, box_a, n_units, t_step, equil_ps, sample_ps,
             env[k] = v
     if mech is not None:
         env["MECH"] = 1 if mech else 0
-    if shear:
-        env["SHEAR"] = 1
+    if tensile:
+        env["MECH_TENSILE"] = 1          # module d'Young E/ν/G (traction uniaxiale) — coûteux
+    if dielectric:
+        env["DIELECTRIC"] = 1            # diélectrique statique + auto-diffusion (sampling long) — coûteux
     if cool_indep:
         env["COOL_INDEP"] = 1
     return env
@@ -727,7 +732,7 @@ def run(
             console.print("[green]✓[/green] Code synchronisé sur CRIANN.")
 
         env = _collect_env(smiles, box_a, n_units, t_step, equil_ps, sample_ps,
-                           mech, shear, cool_indep)
+                           mech=mech, tensile=shear, cool_indep=cool_indep)  # --shear pilote E/ν (MECH_TENSILE)
         env.update(window_env)
         if seeds > 1:
             jobs = []

@@ -4,10 +4,12 @@ Un seul GPU, ~15-18 min (boîte 48k atomes — voir le plancher SNR ci-dessous).
 SORTIES :
   Tg_pred   : Tg expérimentale prédite = Tg_sim / 1.50  (correction CINÉTIQUE universelle,
               MAE ~26 K sur 14 polymères, sans dépendance chimique ; cf project-md-pipeline).
-  density_300K, CTE_glass : densité et dilatation thermique (gratuit, depuis ρ(T)).
+  density_300K : densité (FIABLE). CTE_*_experimental : dilatation (gratuit depuis ρ(T), ⚠ non validée).
   K_GPa     : module de compression (fluctuations de volume — FIABLE).
-  E/ν/G     : traction uniaxiale stress-strain (latéral relaxé) — MECH_TENSILE=1 (défaut). Cross-check
-              interne K=E/(3(1−2ν)) vs K_fluct. (Remplace l'ancien energy-strain cassé.)
+  STANDARD (toujours) : Tg, densité, Cp, K, Rg/Ree, FFV, CED/δ, indice, CTE(flaggée).
+  OPT-IN (coûteux, +dizaines de min, cases à cocher webapp) :
+    E/ν/G  (MECH_TENSILE=1) : traction uniaxiale stress-strain ; ν,G dérivés de E+K.
+    diélectrique statique + auto-diffusion (DIELECTRIC=1) : sampling long 300 K (~400 ps).
 
 MÉTHODE : build compact + OpenFF Sage + HMR 4fs → compression → fonte → refroidissement PAR PALIERS
 (P1 : 20 K/palier, 100+50 ps) sur fenêtre étroite centrée sur 1.5×Tg_exp → fit hyperbolique de ρ(T)
@@ -317,6 +319,12 @@ def main():
         # indice de réfraction (gratuit) : Lorentz-Lorenz, φ = R_M·ρ/M (R_M = réfraction molaire Crippen)
         phi_ll = mr_chain * dens300 / m_chain if dens300 else None
         n_refr = (((1 + 2 * phi_ll) / (1 - phi_ll)) ** 0.5) if (phi_ll and phi_ll < 1) else None
+        # CTE (déjà calculée par le fit : asymptotes vitreuse/fondue de ρ(T), det["cte_glass/rubber"]).
+        # ⚠ NON VALIDÉE (r≈−0.46 vs exp ; RadonPy aussi la sort bruitée → PMMA négatif). On l'EXPOSE
+        # quand même, flaggée _experimental, pour la parité de largeur — c'est un sous-produit gratuit,
+        # aucun MD en plus. Convention : coefficient VOLUMIQUE en ppm/K (det l'a déjà).
+        cte_glass = round(det["cte_glass"], 1) if det.get("cte_glass") is not None else None
+        cte_melt = round(det["cte_rubber"], 1) if det.get("cte_rubber") is not None else None
         rec = tg_kinetics.recommend_window(temps, R, tg_hyp, t_step) if not quality["reliable"] else None
     if not quality["reliable"]:
         print(f"  ⚠️  hyperbole peu fiable → Tg via COUDE-2-SEGMENTS (repli robuste) : "
@@ -342,8 +350,8 @@ def main():
              "Cp_JgK": round(cp_jgk, 2),                               # Cp corrigé (classique ÷2.27)
              "Cp_classical_JgK": round(cp_classical, 2),               # Cp classique brut (surestimé)
              "refractive_index": round(n_refr, 3) if n_refr else None, # indice de réfraction (gratuit)
-             # CTE : RETIRÉ de la sortie (non fiable, r≈−0.46 vs exp). C'est un sous-produit gratuit du
-             # fit (det["cte_glass"]) — pas un calcul MD séparé — donc rien à économiser, juste pas affiché.
+             "CTE_glass_ppmK_experimental": cte_glass,    # dilatation volumique vitreuse — ⚠ NON VALIDÉE
+             "CTE_melt_ppmK_experimental": cte_melt,      #   (r≈−0.46 vs exp) ; exposée pour parité largeur
              "fit_reliable": quality["reliable"], "fit_warnings": quality["reasons"],
              "fit_direction": rec["direction"] if rec else None,
              "fit_recommendation": rec["message"] if rec else None}
@@ -393,6 +401,40 @@ def main():
         # systématique ~−20% ; calibré sur 8 polymères → MAE 20%→10%. (cf Cp÷2.27, Tg÷1.50.)
         props["solubility_delta"] = round(delta * 1.25, 1)
 
+        # ── Diélectrique statique + auto-diffusion — OPT-IN (DIELECTRIC=1) ──
+        # CONVERGENT LENTEMENT (le diélectrique demande ~ns pour converger ⟨M²⟩) → hors run standard ;
+        # coché par l'utilisateur (coût +~10-30 min). On réutilise l'état 300 K + V_m3 du bloc CED.
+        if os.environ.get("DIELECTRIC", "0") == "1":
+            with P.block("10c_dielec_diff"):
+                nbf = next(f for f in omm_system.getForces() if isinstance(f, NonbondedForce))
+                q = np.array([nbf.getParticleParameters(i)[0].value_in_unit(unit.elementary_charge)
+                              for i in range(omm_system.getNumParticles())])
+                mols = [np.array([a.index for a in ch.atoms()]) for ch in omm_top.chains()]
+                nfr = int(os.environ.get("DIEL_FRAMES", "200"))      # ~400 ps (opt-in → long)
+                Ms, coms, box = [], [], None
+                for _ in range(nfr):
+                    sim.step(2 * spp)                                # 2 ps entre frames
+                    s = sim.context.getState(getPositions=True)
+                    p = s.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
+                    box = np.diag(s.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer))
+                    Mtot, cm = np.zeros(3), []
+                    for idx in mols:
+                        r = p[idx]; r = r - box * np.round((r - r[0]) / box)   # molécule rendue entière
+                        Mtot += (q[idx][:, None] * r).sum(0)                   # dipôle (e·nm), neutre→invariant
+                        cm.append(r.mean(0))
+                    Ms.append(Mtot); coms.append(np.array(cm))
+                Ms = np.array(Ms); coms = np.array(coms)
+                e_nm = 1.602176634e-19 * 1e-9
+                var_M = float((Ms ** 2).sum(1).mean() - (Ms.mean(0) ** 2).sum())
+                eps_st = 1.0 + var_M * e_nm ** 2 / (3 * 8.8541878128e-12 * V_m3 * 1.380649e-23 * 300.0)
+                disp = np.diff(coms, axis=0); disp -= box * np.round(disp / box)
+                unwr = np.cumsum(np.vstack([coms[:1], disp]), axis=0)
+                msd = ((unwr - unwr[0]) ** 2).sum(2).mean(1)
+                t_ps = np.arange(nfr) * 2.0
+                D = max(0.0, float(np.polyfit(t_ps[nfr // 2:], msd[nfr // 2:], 1)[0]) / 6.0 * 1e-6) if nfr > 6 else None
+            props["static_dielectric"] = round(float(eps_st), 2)             # ⚠ encore sous-convergé
+            props["self_diffusion_m2s"] = float(f"{D:.2e}") if D is not None else None  # ~0 au verre
+
         # E / ν / G : ESSAI DE TRACTION UNIAXIALE (stress-strain). Remplace l'energy-strain cassé.
         # On étire la boîte selon z par PALIERS de déformation ε_zz, en laissant x,y RELAXER à 1 bar
         # (barostat ANISOTROPE, z non scalé) → essai de traction réel (contrainte uniaxiale). À chaque
@@ -405,7 +447,7 @@ def main():
         # E = pente(σ_zz vs ε_zz). Puis ν et G DÉRIVÉS de E (traction) + K (fluctuations de volume),
         # les deux grandeurs robustes : ν=(3K−E)/(6K), G=3KE/(9K−E). On évite le ν par dimensions de
         # boîte (trop bruité sur un verre rigide : sa variation par 1% axial n'est que ~ν% de Lx).
-        if os.environ.get("MECH_TENSILE", "1") == "1":
+        if os.environ.get("MECH_TENSILE", "0") == "1":
             print("  → E/ν par traction uniaxiale (stress-strain, latéral relaxé)…", flush=True)
             with P.block("11_tensile"):
                 from openmm import MonteCarloAnisotropicBarostat, Vec3

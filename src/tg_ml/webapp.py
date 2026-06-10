@@ -130,7 +130,9 @@ async def submit(req: Request):
     n_units = int(nu) if nu else None
     env = cli._collect_env(smiles, _num(d.get("box_a")), n_units, _num(d.get("t_step")),
                            _num(d.get("equil_ps")), _num(d.get("sample_ps")),
-                           bool(d.get("mech", True)), bool(d.get("shear", False)), False)
+                           mech=bool(d.get("mech", True)),
+                           tensile=bool(d.get("tensile", False)),        # case "Module d'Young" (coûteux)
+                           dielectric=bool(d.get("dielectric", False)))  # case "Diélectrique+diffusion" (coûteux)
     env.update(win)
     name = cli._slug(smiles)
     seeds = max(1, min(20, int(_num(d.get("seeds")) or 1)))      # borne aussi le nb de jobs (anti-abus)

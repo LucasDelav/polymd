@@ -156,8 +156,10 @@
           <div class="lblrow"><label for="time" data-i18n="lbl_time">Temps SLURM</label>
             <span class="tip" data-tip="tip_time">i</span></div>
           <input id="time" value="02:00:00">
-          <div class="chk"><input id="shear" type="checkbox"> <span data-i18n="chk_shear">Modules G/E/ν (expérimental)</span>
-            <span class="tip" data-tip="tip_shear">i</span></div>
+          <div class="chk"><input id="tensile" type="checkbox"> <span data-i18n="chk_tensile">Module d'Young E/ν/G (+~15 min)</span>
+            <span class="tip" data-tip="tip_tensile">i</span></div>
+          <div class="chk"><input id="dielectric" type="checkbox"> <span data-i18n="chk_dielectric">Diélectrique + diffusion (+~20 min)</span>
+            <span class="tip" data-tip="tip_dielectric">i</span></div>
         </details>
 
         <div class="chk"><input id="mech" type="checkbox" checked> <span data-i18n="chk_mech">Calculer module K / δ</span>
@@ -197,7 +199,7 @@ const I18N = {
     grp_adv:"Advanced parameters",
     lbl_seeds:"Seeds", lbl_nunits:"Units (n)", lbl_box:"Box (Å)", lbl_tstep:"T step (K)", lbl_time:"SLURM time",
     lbl_equil:"Equil. (ps)", lbl_sample:"Sample (ps)",
-    chk_shear:"Moduli G/E/ν (experimental)", chk_mech:"Compute modulus K / δ", chk_sync:"Sync code",
+    chk_tensile:"Young's modulus E/ν/G (+~15 min)", chk_dielectric:"Dielectric + diffusion (+~20 min)", chk_mech:"Compute modulus K / δ", chk_sync:"Sync code",
     launch:"▶ Launch", status_start:"Draw the unit, then launch", newdraw:"← New drawing",
     // tooltips
     tip_seeds:"Number of independent random-seed runs (1 GPU job each). With >1, results are averaged and shown as mean ± standard error (σ/√N), which shrinks the uncertainty. 3–5 is a good trade-off; each seed costs one full run.",
@@ -210,7 +212,8 @@ const I18N = {
     tip_time:"SLURM wall-clock limit (HH:MM:SS). The compute itself is ~15–18 min once the job starts; the rest is GPU queue wait.",
     tip_equil:"Equilibration time per temperature step, in ps (default 100). Longer = better-relaxed structure, slower.",
     tip_sample:"Production/sampling time per temperature step, in ps (default 50). Longer = less noisy density, slower.",
-    tip_shear:"Also compute shear/Young's moduli G, E and Poisson ratio ν. EXPERIMENTAL and not validated — the values can be unreliable.",
+    tip_tensile:"Uniaxial-tensile MD → Young's modulus E, Poisson ν, shear G (ν,G derived from E + K). Separate deformation run, adds ~10-15 min. FF-limited (under-predicts stiff polymers).",
+    tip_dielectric:"Static dielectric constant (dipole fluctuations) + self-diffusion, from a dedicated long sampling run at 300 K (~400 ps). Adds ~10-30 min. Slow to converge → indicative.",
     tip_mech:"Compute the bulk modulus K (and solubility δ) from volume fluctuations. Adds a little time.",
     tip_sync:"Push the latest pipeline code to CRIANN before submitting. Leave on unless you know it is already up to date.",
     // validation
@@ -252,7 +255,7 @@ const I18N = {
     grp_adv:"Paramètres avancés",
     lbl_seeds:"Graines", lbl_nunits:"Unités (n)", lbl_box:"Boîte (Å)", lbl_tstep:"Pas T (K)", lbl_time:"Temps SLURM",
     lbl_equil:"Équil. (ps)", lbl_sample:"Mesure (ps)",
-    chk_shear:"Modules G/E/ν (expérimental)", chk_mech:"Calculer module K / δ", chk_sync:"Synchroniser le code",
+    chk_tensile:"Module d'Young E/ν/G (+~15 min)", chk_dielectric:"Diélectrique + diffusion (+~20 min)", chk_mech:"Calculer module K / δ", chk_sync:"Synchroniser le code",
     launch:"▶ Lancer le calcul", status_start:"Dessine le motif, puis lance le calcul", newdraw:"← Nouveau dessin",
     tip_seeds:"Nombre de runs à graines aléatoires indépendantes (1 job GPU chacun). Avec >1, les résultats sont moyennés et affichés en moyenne ± erreur-type (σ/√N), ce qui réduit l'incertitude. 3–5 est un bon compromis ; chaque graine coûte un run complet.",
     tip_smiles:"SMILES du motif de répétition avec exactement 2 points d'attache (*). Chaque * marque la liaison vers le motif suivant. Ex. polystyrène : *CC(*)c1ccccc1",
@@ -264,7 +267,8 @@ const I18N = {
     tip_time:"Limite de temps SLURM (HH:MM:SS). Le calcul lui-même dure ~15–18 min une fois lancé ; le reste est l'attente en file GPU.",
     tip_equil:"Temps d'équilibration par palier de température, en ps (défaut 100). Plus long = structure mieux relaxée, plus lent.",
     tip_sample:"Temps de production/échantillonnage par palier, en ps (défaut 50). Plus long = densité moins bruitée, plus lent.",
-    tip_shear:"Calcule aussi les modules de cisaillement/Young G, E et le coefficient de Poisson ν. EXPÉRIMENTAL et non validé — valeurs potentiellement peu fiables.",
+    tip_tensile:"MD de traction uniaxiale → module d'Young E, Poisson ν, cisaillement G (ν,G dérivés de E + K). Run de déformation séparé, +~10-15 min. Limité par le FF (sous-estime les polymères rigides).",
+    tip_dielectric:"Constante diélectrique statique (fluctuations de dipôle) + auto-diffusion, depuis un run de sampling long dédié à 300 K (~400 ps). +~10-30 min. Converge lentement → indicatif.",
     tip_mech:"Calcule le module de compression K (et la solubilité δ) par fluctuations de volume. Ajoute un peu de temps.",
     tip_sync:"Pousse le code du pipeline le plus récent vers CRIANN avant de soumettre. Laisse coché sauf si tu sais qu'il est déjà à jour.",
     v_ok:"OK ({n} atomes lourds, 2 points d'attache).",
@@ -421,7 +425,9 @@ async function run(){
   const body={smiles:val('smiles'), tg_exp:val('tg_exp'), partition:val('partition'),
     seeds:val('seeds'), n_units:val('n_units'), box_a:val('box_a'), t_step:val('t_step'),
     equil_ps:val('equil_ps'), sample_ps:val('sample_ps'), time:val('time'),
-    mech:document.getElementById('mech').checked, shear:document.getElementById('shear').checked,
+    mech:document.getElementById('mech').checked,
+    tensile:document.getElementById('tensile').checked,
+    dielectric:document.getElementById('dielectric').checked,
     sync:document.getElementById('sync').checked};
   let res; try{ res=await(await fetch('/api/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json(); }
   catch(e){ logln(t('r_neterr'),'err'); setStatus(t('r_failed')); go.disabled=false; return; }
