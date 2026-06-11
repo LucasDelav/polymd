@@ -146,6 +146,47 @@ def compute_ced(pos, boxL, omm_top, n_chains, single_sim, e_bulk_kjmol, V_m3):
     return ced_mpa, (max(ced_mpa, 0.0)) ** 0.5
 
 
+def xtb_electronic(unit_smiles):
+    """Propriétés ÉLECTRONIQUES du motif (HOMO/LUMO/gap, dipôle, polarisabilité) par xtb GFN2-xTB
+    (semi-empirique, ~secondes) sur le monomère cappé H. Info NOUVELLE (non dérivable de la MD), utile
+    optique/électronique. Renvoie {} si xtb indisponible/échoue (gracieux). XTB_BIN surchargeable."""
+    import subprocess, tempfile, shutil, re
+    xtb = os.path.expanduser(os.environ.get("XTB_BIN", "~/conda_xtb/bin/xtb"))
+    if not os.path.exists(xtb):
+        return {}
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+    m = Chem.MolFromSmiles(str(unit_smiles).replace("*", "[H]"))
+    if m is None:
+        return {}
+    m = Chem.AddHs(m)
+    if AllChem.EmbedMolecule(m, randomSeed=1) != 0:
+        return {}
+    AllChem.MMFFOptimizeMolecule(m, maxIters=300)
+    d = tempfile.mkdtemp(); xyz = os.path.join(d, "m.xyz")
+    Chem.MolToXYZFile(m, xyz)
+    try:
+        out = subprocess.run([xtb, xyz, "--gfn", "2"], cwd=d, capture_output=True,
+                             text=True, timeout=180).stdout
+    except Exception:
+        return {}
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    res = {}
+    pats = {"homo_lumo_gap_eV": (r"HOMO-LUMO gap\s+([-\d.]+)\s+eV", 3),
+            "HOMO_eV": (r"([-\d.]+)\s+\(HOMO\)", 3),
+            "LUMO_eV": (r"([-\d.]+)\s+\(LUMO\)", 3),
+            "dipole_Debye": (r"molecular dipole:.*?full:\s+[-\d.]+\s+[-\d.]+\s+[-\d.]+\s+([\d.]+)", 3)}
+    for key, (pat, nd) in pats.items():
+        mm = re.search(pat, out, re.DOTALL)
+        if mm:
+            res[key] = round(float(mm.group(1)), nd)
+    a = re.search(r"\(0\)\s*/au\s*:\s*([\d.]+)", out)               # Mol. α(0) /au (α unicode)
+    if a:
+        res["polarizability_A3"] = round(float(a.group(1)) * 0.1481847, 2)   # ua → Å³
+    return res
+
+
 def main():
     smiles = os.environ.get("SMILES", "*CC(*)c1ccccc1")
     tg_exp = float(os.environ.get("TG_EXP", "373"))
@@ -378,6 +419,39 @@ def main():
         props["K_GPa_ci"] = round(K_ci, 2)
         props["compressibility_1_GPa"] = round(1.0 / float(K_fluct), 4)   # κ = 1/K (gratuit)
 
+        # Dérivés thermo (gratuits) : Cv + grandeurs ISENTROPIQUES via Cp−Cv = T·α_V²/(ρ·κ_T) puis γ=Cp/Cv.
+        # ⚠ dépend de la CTE (α_V), peu fiable → flaggés _experimental. (RadonPy les sort aussi du même eq.)
+        if cte_glass is not None and dens300 and K_fluct:
+            aV = cte_glass * 1e-6                                              # CTE volumique (1/K)
+            dCpv = mech_T * aV ** 2 / (dens300 * 1000.0 * (1.0 / (float(K_fluct) * 1e9))) / 1000.0  # Cp−Cv (J/g/K)
+            cv = cp_jgk - dCpv
+            props["Cv_JgK_experimental"] = round(cv, 2)
+            if cv:
+                gamma = cp_jgk / cv
+                Ks = float(K_fluct) * gamma                                   # module isentropique (GPa)
+                props["isentropic_compressibility_1_GPa_experimental"] = round((1.0 / float(K_fluct)) / gamma, 4)
+                props["isentropic_K_GPa_experimental"] = round(Ks, 2)
+                # vitesse du son (bulk) v = √(K_S/ρ) — vraie propriété matériau (dérivée, gratuite)
+                props["sound_velocity_ms"] = round((Ks * 1e9 / (dens300 * 1000.0)) ** 0.5, 0)
+
+        # Ordre nématique (gratuit) : S = max valeur propre de Q = ⟨(3 u⊗u − I)/2⟩ sur les vecteurs liaison
+        # u. 0 = isotrope (amorphe attendu), →1 = aligné. Vérif qualité (pas d'orientation parasite) +
+        # pertinence cristal-liquide. RadonPy le sort aussi.
+        with P.block("10d_nematic"):
+            st_n = sim.context.getState(getPositions=True)
+            pn = st_n.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
+            boxn = np.diag(st_n.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer))
+            uu = []
+            for b in omm_top.bonds():
+                d = pn[b.atom2.index] - pn[b.atom1.index]; d -= boxn * np.round(d / boxn)   # image minimale
+                nrm = float(np.linalg.norm(d))
+                if nrm > 1e-6:
+                    uu.append(d / nrm)
+            uu = np.array(uu)
+            Q = (3.0 * np.einsum("ia,ib->ab", uu, uu) / len(uu) - np.eye(3)) / 2.0
+            S_nem = float(np.linalg.eigvalsh(Q).max())
+        props["nematic_order"] = round(S_nem, 3)
+
         # CED / paramètre de solubilité δ (conformation gelée). À 300 K (T de référence pour δ ;
         # le calculer au verre t_low — souvent ≫300K — sous-estimait δ de ~20-30%).
         with P.block("10b_ced"):
@@ -563,6 +637,20 @@ def main():
             print(f"     E={E:.2f} GPa (traction) | K={K:.2f} GPa (vol.fluct) → ν={nu:.3f} G={G:.2f} GPa"
                   f" | ν_boxdiag={nu_box:.3f}",
                   flush=True)
+
+    # Propriétés électroniques QM (xtb sur le motif) : HOMO/LUMO/gap, dipôle, polarisabilité. ~secondes,
+    # gracieux si xtb absent. (Info NOUVELLE non dérivable de la MD ; pertinence optique/électronique.)
+    with P.block("12_xtb_electronic"):
+        qm_elec = xtb_electronic(smiles)
+    props.update(qm_elec)
+    # Indice de réfraction QM (Lorentz-Lorenz avec la polarisabilité xtb) en plus de l'estimation Crippen.
+    if qm_elec.get("polarizability_A3") and props.get("density_300K"):
+        # φ = (4π/3)·N_A·α·ρ/M_unit ; α en cm³, ρ en g/cm³, M_unit en g/mol. (α du motif cappé H ≈ par-unité.)
+        alpha_cm3 = qm_elec["polarizability_A3"] * 1e-24
+        phi = 4.0 / 3.0 * 3.14159265 * 6.02214076e23 * alpha_cm3 * props["density_300K"] / m_chain * n_units
+        n_qm = ((1 + 2 * phi) / (1 - phi)) ** 0.5 if 0 < phi < 1 else None
+        if n_qm:
+            props["refractive_index_QM"] = round(float(n_qm), 3)
 
     print("\n=== PROPRIÉTÉS ===")
     print(json.dumps(props, indent=1))
