@@ -243,9 +243,17 @@ const I18N = {
     res_perseed:"Tg per seed: {d}",
     noprops:"No properties (job failed?).",
     // property labels
-    Tg_pred:"Predicted Tg", density_300K:"Density @300K", FFV:"Free volume",
-    Rg_nm:"Radius of gyration", refractive_index:"Refractive index", Cp_JgK:"Heat capacity Cp",
-    K_GPa:"Bulk modulus K", solubility_delta:"Solubility δ",
+    Tg_pred:"Predicted Tg", Tg_sim:"Simulated Tg (before ÷1.50)", density_300K:"Density @300K",
+    CTE_glass_ppmK_experimental:"CTE (glassy)", FFV:"Free volume",
+    Rg_nm:"Radius of gyration", Ree_nm:"End-to-end distance", nematic_order:"Nematic order",
+    Cp_JgK:"Heat capacity Cp", Cv_JgK_experimental:"Heat capacity Cv",
+    K_GPa:"Bulk modulus K", compressibility_1_GPa:"Compressibility", isentropic_K_GPa_experimental:"Isentropic modulus K_S",
+    sound_velocity_ms:"Sound velocity", E_GPa:"Young's modulus E", poisson:"Poisson ratio ν", G_GPa:"Shear modulus G",
+    solubility_delta:"Solubility δ", CED_MPa:"Cohesive energy density", static_dielectric:"Dielectric constant", self_diffusion_m2s:"Self-diffusion",
+    refractive_index:"Refractive index (Crippen)", refractive_index_QM:"Refractive index (QM)",
+    polarizability_A3:"Polarizability", dipole_Debye:"Dipole moment",
+    homo_lumo_gap_eV:"HOMO-LUMO gap", HOMO_eV:"HOMO", LUMO_eV:"LUMO",
+    ionization_potential_eV:"Ionization potential", electron_affinity_eV:"Electron affinity",
   },
   fr: {
     subtitle:"Propriétés MD de polymères · calcul sur CRIANN",
@@ -294,9 +302,17 @@ const I18N = {
     res_seeds_note:"Moyenne sur {n} graines · ± = erreur-type σ/√N · fits fiables {r}/{n}",
     res_perseed:"Tg par graine : {d}",
     noprops:"Aucune propriété (job échoué ?).",
-    Tg_pred:"Tg prédite", density_300K:"Densité @300K", FFV:"Volume libre",
-    Rg_nm:"Rayon de giration", refractive_index:"Indice de réfraction", Cp_JgK:"Capacité Cp",
-    K_GPa:"Module K", solubility_delta:"Solubilité δ",
+    Tg_pred:"Tg prédite", Tg_sim:"Tg simulée (avant ÷1.50)", density_300K:"Densité @300K",
+    CTE_glass_ppmK_experimental:"CTE (vitreux)", FFV:"Volume libre",
+    Rg_nm:"Rayon de giration", Ree_nm:"Distance bout-à-bout", nematic_order:"Ordre nématique",
+    Cp_JgK:"Capacité Cp", Cv_JgK_experimental:"Capacité Cv",
+    K_GPa:"Module K", compressibility_1_GPa:"Compressibilité", isentropic_K_GPa_experimental:"Module isentropique K_S",
+    sound_velocity_ms:"Vitesse du son", E_GPa:"Module de Young E", poisson:"Coefficient de Poisson ν", G_GPa:"Module de cisaillement G",
+    solubility_delta:"Solubilité δ", CED_MPa:"Énergie cohésive", static_dielectric:"Constante diélectrique", self_diffusion_m2s:"Auto-diffusion",
+    refractive_index:"Indice de réfraction (Crippen)", refractive_index_QM:"Indice de réfraction (QM)",
+    polarizability_A3:"Polarisabilité", dipole_Debye:"Moment dipolaire",
+    homo_lumo_gap_eV:"Gap HOMO-LUMO", HOMO_eV:"HOMO", LUMO_eV:"LUMO",
+    ionization_potential_eV:"Potentiel d'ionisation", electron_affinity_eV:"Affinité électronique",
   }
 };
 let LANG = (navigator.language||'en').toLowerCase().startsWith('fr') ? 'fr' : 'en';
@@ -402,8 +418,15 @@ function validate(){
 }
 
 /* ============================ run / logs / results ============================ */
-const PROPS=[["Tg_pred","K"],["density_300K","g/cm³"],["FFV",""],["Rg_nm","nm"],
-  ["refractive_index",""],["Cp_JgK","J/g/K"],["K_GPa","GPa"],["solubility_delta","MPa^½"]];
+const PROPS=[["Tg_pred","K"],["Tg_sim","K"],["density_300K","g/cm³"],
+  ["CTE_glass_ppmK_experimental","ppm/K"],["FFV",""],["Rg_nm","nm"],["Ree_nm","nm"],
+  ["nematic_order",""],["Cp_JgK","J/g/K"],["Cv_JgK_experimental","J/g/K"],
+  ["K_GPa","GPa"],["compressibility_1_GPa","GPa⁻¹"],["isentropic_K_GPa_experimental","GPa"],
+  ["sound_velocity_ms","m/s"],["E_GPa","GPa"],["poisson",""],["G_GPa","GPa"],
+  ["solubility_delta","MPa^½"],["CED_MPa","MPa"],["static_dielectric",""],["self_diffusion_m2s","m²/s"],
+  ["refractive_index",""],["refractive_index_QM",""],["polarizability_A3","Å³"],["dipole_Debye","D"],
+  ["homo_lumo_gap_eV","eV"],["HOMO_eV","eV"],["LUMO_eV","eV"],
+  ["ionization_potential_eV","eV"],["electron_affinity_eV","eV"]];
 
 function setStatus(text,cls){ document.getElementById('status').textContent=text;
   const dot=document.getElementById('dot'); dot.className='dot'+(cls?' '+cls:''); }

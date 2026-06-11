@@ -184,6 +184,22 @@ def xtb_electronic(unit_smiles):
     a = re.search(r"\(0\)\s*/au\s*:\s*([\d.]+)", out)               # Mol. α(0) /au (α unicode)
     if a:
         res["polarizability_A3"] = round(float(a.group(1)) * 0.1481847, 2)   # ua → Å³
+    # IP/EA verticaux (2ᵉ appel --vipea : calcs cation/anion) — potentiel d'ionisation, affinité électr.
+    d2 = tempfile.mkdtemp()
+    try:
+        Chem.MolToXYZFile(m, os.path.join(d2, "m.xyz"))
+        out2 = subprocess.run([xtb, "m.xyz", "--gfn", "2", "--vipea"], cwd=d2,
+                              capture_output=True, text=True, timeout=180).stdout
+        ip = re.search(r"delta SCC IP \(eV\):\s+([-\d.]+)", out2)
+        ea = re.search(r"delta SCC EA \(eV\):\s+([-\d.]+)", out2)
+        if ip:
+            res["ionization_potential_eV"] = round(float(ip.group(1)), 3)
+        if ea:
+            res["electron_affinity_eV"] = round(float(ea.group(1)), 3)
+    except Exception:
+        pass
+    finally:
+        shutil.rmtree(d2, ignore_errors=True)
     return res
 
 
