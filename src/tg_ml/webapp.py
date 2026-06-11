@@ -132,7 +132,8 @@ async def submit(req: Request):
                            _num(d.get("equil_ps")), _num(d.get("sample_ps")),
                            mech=bool(d.get("mech", True)),
                            tensile=bool(d.get("tensile", False)),        # case "Module d'Young" (coûteux)
-                           dielectric=bool(d.get("dielectric", False)))  # case "Diélectrique+diffusion" (coûteux)
+                           dielectric=bool(d.get("dielectric", False)),  # case "Diélectrique+diffusion" (coûteux)
+                           thermal=bool(d.get("thermal", False)))        # case "Conductivité thermique κ" (coûteux)
     env.update(win)
     name = cli._slug(smiles)
     seeds = max(1, min(20, int(_num(d.get("seeds")) or 1)))      # borne aussi le nb de jobs (anti-abus)

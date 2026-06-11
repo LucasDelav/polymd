@@ -418,6 +418,7 @@ PROP_META = {
     "CED_MPa":               ("Énergie cohésive (CED)",     "MPa",      "[dim]info (brut, avant ×1.25²)"),
     "static_dielectric":     ("Constante diélectrique",     "—",        "[yellow]⚠️ opt-in (sous-convergée)"),
     "self_diffusion_m2s":    ("Auto-diffusion",             "m²/s",     "[yellow]⚠️ opt-in (≈0 au verre)"),
+    "thermal_conductivity_WmK": ("Conductivité thermique κ", "W/m/K",   "[yellow]🟡 opt-in (NEMD, borne basse ~−30%)"),
     # optique / électronique (xtb GFN2)
     "refractive_index":      ("Indice de réfraction (Crippen)", "—",    "[green]✅ (MAE ~0.03 vs exp)"),
     "refractive_index_QM":   ("Indice de réfraction (QM)",  "—",        "[green]✅ (polarisabilité xtb)"),
@@ -434,6 +435,7 @@ ORDER = ["Tg_pred", "Tg_sim", "density_300K", "CTE_glass_ppmK_experimental", "FF
          "K_GPa", "compressibility_1_GPa", "isentropic_K_GPa_experimental", "sound_velocity_ms",
          "E_GPa", "poisson", "G_GPa",
          "solubility_delta", "CED_MPa", "static_dielectric", "self_diffusion_m2s",
+         "thermal_conductivity_WmK",
          "refractive_index", "refractive_index_QM", "polarizability_A3", "dipole_Debye",
          "homo_lumo_gap_eV", "HOMO_eV", "LUMO_eV", "ionization_potential_eV", "electron_affinity_eV"]
 
@@ -539,11 +541,12 @@ def effective_window(env: dict, t_step: float) -> tuple[float, float, int]:
 
 
 def _collect_env(smiles, box_a, n_units, t_step, equil_ps, sample_ps,
-                 mech, tensile=False, cool_indep=False, dielectric=False) -> dict:
+                 mech, tensile=False, cool_indep=False, dielectric=False, thermal=False) -> dict:
     """Paramètres NON liés à la fenêtre de température. N'inclut que ceux explicitement fixés.
-    tensile/dielectric = propriétés OPT-IN coûteuses (cases à cocher webapp) :
+    tensile/dielectric/thermal = propriétés OPT-IN coûteuses (cases à cocher webapp) :
       tensile → MECH_TENSILE=1 (module d'Young E/ν/G, +~10-15 min) ;
-      dielectric → DIELECTRIC=1 (diélectrique statique + auto-diffusion, sampling long, +~10-30 min)."""
+      dielectric → DIELECTRIC=1 (diélectrique statique + auto-diffusion, sampling long, +~10-30 min) ;
+      thermal → THERMAL=1 (conductivité thermique κ par reverse-NEMD, +~25-30 min)."""
     env = {"SMILES": smiles}
     opt = {"BOX_A": box_a, "N_UNITS": n_units, "T_STEP": t_step,
            "EQUIL_PS": equil_ps, "SAMPLE_PS": sample_ps}
@@ -556,6 +559,8 @@ def _collect_env(smiles, box_a, n_units, t_step, equil_ps, sample_ps,
         env["MECH_TENSILE"] = 1          # module d'Young E/ν/G (traction uniaxiale) — coûteux
     if dielectric:
         env["DIELECTRIC"] = 1            # diélectrique statique + auto-diffusion (sampling long) — coûteux
+    if thermal:
+        env["THERMAL"] = 1               # conductivité thermique κ (reverse-NEMD HEX) — coûteux
     if cool_indep:
         env["COOL_INDEP"] = 1
     return env

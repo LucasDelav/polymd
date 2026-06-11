@@ -203,6 +203,128 @@ def xtb_electronic(unit_smiles):
     return res
 
 
+def thermal_conductivity_nemd(omm_top, omm_system, plat, pos_nm, box_diag_nm, target_T=300.0):
+    """Conductivité thermique κ (W/m/K) par reverse-NEMD à FLUX IMPOSÉ (algo HEX, Ikeshoji-Hafskjold).
+    OpenMM n'a pas de `fix thermal/conductivity` natif (≠ LAMMPS/RadonPy, Müller-Plathe). On impose
+    plutôt un flux de chaleur CONNU en ré-échelonnant périodiquement les vitesses AUTOUR du COM de
+    chaque slab : +ΔE au slab CHAUD (milieu de la boîte), −ΔE au slab FROID (bord). Ce ré-échelonnage
+    (i) conserve la quantité de mouvement du slab, (ii) injecte un ΔE EXACT, (iii) marche avec des masses
+    mixtes (≠ échange de vitesses, qui suppose masses égales). En régime établi le profil T(z) est
+    linéaire dans chaque demi-boîte ; κ = J / ∇T avec J = ΔE/(intervalle · 2A) (le 2 = 2 chemins par PBC).
+    Dynamique NVE (Verlet) : aucun thermostat global ne doit lutter contre le gradient.
+    OPT-IN (THERMAL=1) — coûteux (~1 ns) et SOUS-ESTIMÉ par effet de taille finie (z≈6 nm → libre
+    parcours des phonons tronqué ; RadonPy allonge la boîte). À prendre comme borne basse / ordre de
+    grandeur. Renvoie (kappa, info) ou (None, {}) si le gradient ne s'établit pas."""
+    import openmm
+    from openmm import unit, VerletIntegrator, LangevinMiddleIntegrator, MonteCarloBarostat
+    from openmm.app import Simulation
+    kB = 1.380649e-23; NA = 6.02214076e23
+    C = 500.0 / NA                       # KE[J] = C · Σ m[g/mol] · v²[nm/ps]   (½·1e3/NA)
+    m = np.array([omm_system.getParticleMass(i).value_in_unit(unit.dalton)
+                  for i in range(omm_system.getNumParticles())])
+    dt = 2.0                              # fs (HMR dans le système → 2 fs sûr en NVE)
+    box = np.array([float(box_diag_nm[0]), float(box_diag_nm[1]), float(box_diag_nm[2])])
+
+    def _purge_baro():
+        for i in reversed(range(omm_system.getNumForces())):
+            if isinstance(omm_system.getForce(i), MonteCarloBarostat):
+                omm_system.removeForce(i)
+    # 1) ré-équilibration NPT à target_T → fixe la BONNE densité (ρ@300K) AVANT de geler le volume.
+    #    (sans ça, on hérite du volume du dernier palier de refroidissement → densité fausse → T moyenne off.)
+    eq_ps = float(os.environ.get("THERMAL_EQ_PS", "40"))
+    _purge_baro(); omm_system.addForce(MonteCarloBarostat(1.0 * unit.bar, target_T * unit.kelvin, 25))
+    ige = LangevinMiddleIntegrator(target_T * unit.kelvin, 1.0 / unit.picosecond, dt * unit.femtoseconds)
+    ige.setRandomNumberSeed(777)
+    se = Simulation(omm_top, omm_system, ige, plat)
+    se.context.setPeriodicBoxVectors(*(np.eye(3) * box)); se.context.setPositions(pos_nm * unit.nanometer)
+    se.context.setVelocitiesToTemperature(target_T * unit.kelvin, 777)
+    se.step(int(eq_ps * 1000 / dt))
+    stt = se.context.getState(getPositions=True, getVelocities=True)
+    pos = stt.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
+    vel = stt.getVelocities(asNumpy=True).value_in_unit(unit.nanometer / unit.picosecond)
+    box = np.diag(stt.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer))   # densité corrigée
+    del se
+    _purge_baro()                        # NEMD = volume fixe → on gèle la boîte ré-équilibrée
+    # 2) production NVE + échanges HEX
+    sp = Simulation(omm_top, omm_system, VerletIntegrator(dt * unit.femtoseconds), plat)
+    sp.context.setPeriodicBoxVectors(*(np.eye(3) * box)); sp.context.setPositions(pos * unit.nanometer)
+    sp.context.setVelocities(vel * unit.nanometer / unit.picosecond)
+    nslab = int(os.environ.get("THERMAL_NSLAB", "20")); nslab -= nslab % 2
+    hot, cold = nslab // 2, 0
+    W = int(os.environ.get("THERMAL_W", "250"))               # pas entre échanges
+    dE = float(os.environ.get("THERMAL_DE", "30.0")) * 1e3 / NA   # J/échange (def 30 kJ/mol)
+    n_ns = float(os.environ.get("THERMAL_NS", "1.2"))
+    n_exch = max(40, int(n_ns * 1e6 / dt / W))
+    Lz = box[2]; slabw = Lz / nslab; A = box[0] * box[1] * 1e-18   # m²
+    # dof EFFECTIFS par atome : les liaisons X–H sont CONTRAINTES (rigides, cf HMR) → chaque contrainte
+    # retire 1 dof. Sans cette correction T est sous-estimée d'un facteur g=(3N−N_c)/3N (≈0.83 pour 50% H)
+    # → ∇T trop petit → κ SURESTIMÉ de 1/g. On répartit g uniformément sur les atomes.
+    nat = len(m); g_dof = (3.0 * nat - omm_system.getNumConstraints()) / (3.0 * nat)
+    Tsum = np.zeros(nslab); Tcnt = np.zeros(nslab); warm = n_exch // 2; n_ok = 0
+    Tmean_hist = []
+
+    def slab_kepec(idx):
+        mi = m[idx]; vi = vel[idx]; vcom = (mi[:, None] * vi).sum(0) / mi.sum()
+        dv = vi - vcom; return vcom, dv, C * (mi[:, None] * dv * dv).sum()
+
+    def slab_T(idx, kep):
+        return 2.0 * kep / (max(3.0 * len(idx) * g_dof - 3.0, 1.0) * kB)
+
+    def global_T(v):
+        vcomG = (m[:, None] * v).sum(0) / m.sum(); dv = v - vcomG
+        return 2.0 * C * (m[:, None] * dv * dv).sum() / (max(3.0 * nat * g_dof - 3.0, 1.0) * kB), vcomG
+
+    pin = float(os.environ.get("THERMAL_PIN", "1.0"))    # force du verrou de T moyenne (1=plein/échange)
+    for e in range(n_exch):
+        sp.step(W)
+        st = sp.context.getState(getPositions=True, getVelocities=True)
+        pos = st.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
+        vel = st.getVelocities(asNumpy=True).value_in_unit(unit.nanometer / unit.picosecond)
+        z = pos[:, 2] - Lz * np.floor(pos[:, 2] / Lz)
+        sid = np.minimum((z / slabw).astype(int), nslab - 1)
+        ok = True
+        for slab, sign in ((hot, +1.0), (cold, -1.0)):
+            idx = np.where(sid == slab)[0]
+            if len(idx) < 10: ok = False; continue
+            vcom, dv, kep = slab_kepec(idx)
+            if sign < 0 and kep <= dE * 1.5: ok = False; continue
+            vel[idx] = vcom + (1.0 + sign * dE / kep) ** 0.5 * dv
+        # ANTI-DÉRIVE : la NVE fuit (projection des contraintes sur les atomes ré-échelonnés + relaxation
+        # résiduelle du verre) → T moyenne dérive (ex. PMMA 302→208 K). On l'épingle à target_T par un
+        # rescale UNIFORME autour du COM GLOBAL : multiplicatif identique sur tous les atomes → la FORME
+        # du profil T(z) (donc ∇T et κ) est INCHANGÉE, seul le niveau moyen est corrigé. No-op si pas de fuite.
+        Tg, vcomG = global_T(vel)
+        if Tg > 0:
+            lamG = 1.0 + pin * ((target_T / Tg) ** 0.5 - 1.0)
+            vel = vcomG + lamG * (vel - vcomG)
+        sp.context.setVelocities(vel * unit.nanometer / unit.picosecond)
+        if ok: n_ok += 1
+        if e >= warm:                                          # accumulation régime établi
+            for s in range(nslab):
+                idx = np.where(sid == s)[0]
+                if len(idx) < 10: continue
+                Tsum[s] += slab_T(idx, slab_kepec(idx)[2]); Tcnt[s] += 1
+        if e % max(1, n_exch // 10) == 0:
+            Tmean_hist.append(round(float(np.mean([slab_T(ix, slab_kepec(ix)[2])
+                              for s in range(nslab) for ix in [np.where(sid == s)[0]]
+                              if len(ix) >= 10])), 1))
+    Tprof = np.where(Tcnt > 0, Tsum / np.maximum(Tcnt, 1), np.nan)
+    J = (n_ok * dE) / (n_exch * W * dt * 1e-15) / (2 * A)      # W/m² (flux moyen réel)
+    zc = (np.arange(nslab) + 0.5) * slabw * 1e-9              # centres de slab (m)
+
+    def slope(a, b):
+        ss = np.arange(a, b); good = ~np.isnan(Tprof[ss])
+        return float(np.polyfit(zc[ss][good], Tprof[ss][good], 1)[0]) if good.sum() >= 3 else None
+    grads = [abs(s) for s in (slope(cold + 1, hot), slope(hot + 1, nslab)) if s is not None]
+    if not grads:
+        return None, {"Tprofile": [round(float(x), 1) for x in Tprof], "Tmean_hist": Tmean_hist}
+    gradT = float(np.mean(grads)); kappa = J / gradT
+    return kappa, {"dT_K": round(float(np.nanmax(Tprof) - np.nanmin(Tprof)), 1),
+                   "flux_Wm2": float(f"{J:.3e}"), "gradT_Kpm": float(f"{gradT:.3e}"),
+                   "box_z_nm": round(float(Lz), 2), "n_exch": n_exch, "frac_ok": round(n_ok / n_exch, 3),
+                   "Tmean_hist": Tmean_hist, "Tprofile": [round(float(x), 1) for x in Tprof]}
+
+
 def main():
     smiles = os.environ.get("SMILES", "*CC(*)c1ccccc1")
     tg_exp = float(os.environ.get("TG_EXP", "373"))
@@ -653,6 +775,23 @@ def main():
             print(f"     E={E:.2f} GPa (traction) | K={K:.2f} GPa (vol.fluct) → ν={nu:.3f} G={G:.2f} GPa"
                   f" | ν_boxdiag={nu_box:.3f}",
                   flush=True)
+
+    # ── Conductivité thermique κ par reverse-NEMD (flux imposé HEX) — OPT-IN (THERMAL=1) ──
+    # Grosse propriété RadonPy restante. Coûteux (~1 ns) + sous-estimé (taille finie) → coché par
+    # l'utilisateur. On part de l'état verre 300 K courant de `sim` (ré-équilibré dans la fonction).
+    if os.environ.get("THERMAL", "0") == "1":
+        with P.block("13_thermal_nemd"):
+            st_t = sim.context.getState(getPositions=True)
+            tp = st_t.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
+            tb = np.diag(st_t.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer))
+            kappa, tinfo = thermal_conductivity_nemd(omm_top, omm_system, plat, tp, tb,
+                                                     target_T=float(os.environ.get("MECH_T", "300")))
+        if kappa is not None:
+            props["thermal_conductivity_WmK"] = round(float(kappa), 3)
+            props["thermal_nemd_dT_K"] = tinfo["dT_K"]
+        print(f"     κ={kappa} W/m/K | ΔT={tinfo.get('dT_K')}K | ∇T={tinfo.get('gradT_Kpm')} K/m"
+              f" | box_z={tinfo.get('box_z_nm')}nm | ok={tinfo.get('frac_ok')}"
+              f"\n     T(z)={tinfo.get('Tprofile')}\n     T_moy(t)={tinfo.get('Tmean_hist')}", flush=True)
 
     # Propriétés électroniques QM (xtb sur le motif) : HOMO/LUMO/gap, dipôle, polarisabilité. ~secondes,
     # gracieux si xtb absent. (Info NOUVELLE non dérivable de la MD ; pertinence optique/électronique.)
