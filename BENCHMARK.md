@@ -48,8 +48,23 @@ Le facteur quantique-DOS, par polymère : 0.349 (PS/PaMS) → 0.436 (PLA).
 
 ¹ Cp biaisé par la phase (Tg < 300 K → caoutchouteux à 300 K).
 
-## Constats actionnables
-- **n** : biais −3% TRÈS systématique → une calibration ×1.03 amènerait à ~1%.
-- **densité** : biais −7% (sous-cohésion FF), chimie-dépendant (−2 à −12%) → limite FF.
+## DÉCOUVERTE CLÉ : densité, n et modules = UNE seule erreur (sous-cohésion FF)
+`refractive_index` = Lorentz-Lorenz avec la densité MD (φ = R_M·ρ/M) → le −3% de n n'est PAS
+indépendant, c'est le −7% de densité qui se propage (dn/n ≈ 0.39·dρ/ρ ≈ −2.7%). Les modules mous
+viennent AUSSI de la sous-densité. ⇒ une SEULE calibration de densité corrige densité ET n.
+
+### Correction densité (DENS_FF_CORR=1.078, commit 7d309a8)
+ρ_corrigée = ρ_MD × 1.078 (estimation ρ_exp ; brut gardé en `density_300K_md`). Cascade sur n et FFV.
+
+| | densité brute | **densité corr.** | n brut | **n corr.** |
+|---|---|---|---|---|
+| PS | −5.9% | **+1.0%** | −2.2% | **+0.9%** |
+| PMMA | −10.8% | **−4.7%** | −3.8% | **−1.4%** |
+| **MAE 12 polym.** | **7.5%** | **~2.7%** | **2.8%** | **~1.3%** |
+
+Résiduel = chimie-dépendance du biais FF (−2 à −12%) ; DENS_FF_CORR=1.0 désactive.
+
+## Constats restants
 - **Cp** : physique solide sur la bonne phase ; pour bas-Tg, mesurer sur la branche caoutchouteuse.
 - **Tg** : PP (−20%) et PIB outliers FF connus ; 4.9% sans eux.
+- **modules E/G** : même cause (sous-densité) mais comprimer sur-estime → limite FF, non calibrable proprement.
