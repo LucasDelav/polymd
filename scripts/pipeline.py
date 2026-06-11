@@ -625,19 +625,45 @@ def main():
     # On trempe donc d'abord de t_low → MECH_T.
     if do_mech:
         mech_T = float(os.environ.get("MECH_T", "300"))
-        # DIAGNOSTIC physique (MECH_P_BAR > 1) : on comprime le verre à pression ÉLEVÉE pour le ramener
-        # vers la DENSITÉ EXP (le FF est sous-dense ~5-8% → verre mou → E sous-estimé). Si K/E remontent
-        # vers l'exp à densité exp, la cause est la sous-densité (pas le FF intrinsèque). 1 bar = défaut.
+        # DIAGNOSTIC (opt-in, défaut OFF) modules vs densité. Le FF est SOUS-DENSE → verre mou → modules
+        # sous-estimés. On peut atteindre une densité cible par recherche de pression adaptative.
+        # ⚠ NE PAS utiliser comme FIX par défaut : comprimer PAR PRESSION introduit un RAIDISSEMENT-PRESSION
+        # qui s'AJOUTE au raidissement-densité → SURESTIME E quand l'écart de densité est grand (PS gap 5%,
+        # 3669bar : E 1.3→3.39≈exp ✓ ; PMMA gap 13%, 8543bar : E→4.5 ≫ exp 2.9 ✗ ; PC E→3.9 ≫ 2.3 ✗).
+        # Cause racine = SOUS-COHÉSION du FF (chimie-dépendante, pire pour polaires) = limite FF, pas
+        # d'échantillonnage. MECH_RHO_TARGET = densité absolue g/cm³ (validation) ; MECH_RHO_FAC × densité
+        # prédite ; MECH_P_BAR force une pression brute. Défaut 1.0/1.0 = aucune correction.
         mech_p = float(os.environ.get("MECH_P_BAR", "1.0"))
+        rho_fac = float(os.environ.get("MECH_RHO_FAC", "1.0"))
+        rho_target_env = os.environ.get("MECH_RHO_TARGET", "")
         kT = 1.380649e-23 * mech_T                  # J
+
+        def _rho_now():
+            V = sim.context.getState().getPeriodicBoxVolume().value_in_unit(unit.nanometer**3) * 1e-21
+            return mass_g / V                        # g/cm³
+
         # K via fluctuations de volume (NPT court au verre, à MECH_T).
         with P.block("10_K_volfluct"):
             ig.setTemperature(mech_T * unit.kelvin); sim.context.setParameter(baro.Temperature(), mech_T)
             sim.context.setParameter(baro.Pressure(), mech_p * unit.bar)
             sim.step(60 * spp)                       # trempe t_low→MECH_T + ré-équilibre (densifie)
-            if mech_p > 1.0:                          # densité atteinte sous la pression imposée (diag)
-                Vp = sim.context.getState().getPeriodicBoxVolume().value_in_unit(unit.nanometer**3) * 1e-21
-                props["density_mechP"] = round(mass_g / Vp, 4); props["mech_P_bar"] = mech_p
+            rho_tgt = float(rho_target_env) if rho_target_env else (_rho_now() * rho_fac if rho_fac != 1.0 else None)
+            if rho_tgt:                              # RECHERCHE de pression pour atteindre la densité cible
+                Pp, rp = mech_p, _rho_now(); Keff = 4.0    # K initial grossier (GPa) du verre comprimé
+                for _ in range(5):
+                    rho_c = _rho_now()
+                    if abs(rho_c / rho_tgt - 1.0) < 0.008:
+                        break
+                    Pn = max(1.0, Pp + Keff * 1e4 * (rho_tgt / rho_c - 1.0))   # Newton (ΔP=K·1e4·Δρ/ρ ; 1GPa=1e4bar)
+                    sim.context.setParameter(baro.Pressure(), Pn * unit.bar); sim.step(40 * spp)
+                    rn = _rho_now()
+                    if abs(rn - rp) > 1e-4 and abs(Pn - Pp) > 1.0:            # K_eff local mesuré → adaptatif
+                        Keff = min(max(((Pn - Pp) / 1e4) / ((rn - rp) / rn), 1.0), 20.0)
+                    Pp, rp = Pn, rn
+                mech_p = Pp
+                print(f"   [modules@ρ] cible ρ={rho_tgt:.3f} → P={mech_p:.0f}bar ρ_obt={_rho_now():.3f} g/cm³", flush=True)
+            if mech_p > 1.0:                          # densité atteinte sous la pression imposée
+                props["density_mechP"] = round(_rho_now(), 4); props["mech_P_bar"] = round(mech_p, 0)
             Vs = []
             for _ in range(40):                      # NB: K par fluctuations de volume = IMPRÉCIS/dispersé
                 sim.step(2 * spp)                    # (sensible à la longueur de sampling) → flaggé ⚠ dans la CLI
