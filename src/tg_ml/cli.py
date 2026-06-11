@@ -397,7 +397,8 @@ PROP_META = {
     # thermique / structure
     "Tg_pred":               ("Tg prédite",                 "K",        "[green]✅ fiable (MAE ~13 K, 30 polym.)"),
     "Tg_sim":                ("Tg simulée (avant ÷1.50)",   "K",        "[dim]info"),
-    "density_300K":          ("Densité @300 K",             "g/cm³",    "[green]✅ fiable (~5 %)"),
+    "density_300K":          ("Densité @300 K",             "g/cm³",    "[green]✅ FF corrigé ×1.078 (~3 %)"),
+    "density_300K_md":       ("Densité @300 K (MD brute)",  "g/cm³",    "[dim]info (FF sous-dense ~−7 %)"),
     "CTE_glass_ppmK":        ("CTE (vitreux, dédié)",       "ppm/K",    "[yellow]🟡 mesure dédiée 270-330K (~35%)"),
     "CTE_glass_ppmK_experimental": ("CTE (vitreux, fit)",   "ppm/K",    "[dim]info (pente du fit, bruitée)"),
     "FFV":                   ("Volume libre (FFV)",         "—",        "[green]✅ physique (convention 1.3)"),
@@ -431,7 +432,7 @@ PROP_META = {
     "ionization_potential_eV": ("Potentiel d'ionisation",   "eV",       "[green]✅ xtb GFN2 (vertical)"),
     "electron_affinity_eV":  ("Affinité électronique",      "eV",       "[green]✅ xtb GFN2 (vertical)"),
 }
-ORDER = ["Tg_pred", "Tg_sim", "density_300K", "CTE_glass_ppmK", "CTE_glass_ppmK_experimental", "FFV",
+ORDER = ["Tg_pred", "Tg_sim", "density_300K", "density_300K_md", "CTE_glass_ppmK", "CTE_glass_ppmK_experimental", "FFV",
          "Rg_nm", "Ree_nm", "nematic_order", "Cp_JgK", "Cv_JgK_experimental",
          "K_GPa", "compressibility_1_GPa", "isentropic_K_GPa_experimental", "sound_velocity_ms",
          "E_GPa", "poisson", "G_GPa",

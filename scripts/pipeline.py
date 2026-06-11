@@ -573,7 +573,15 @@ def main():
         tg_pred = tg_sim / 1.50                       # facteur universel
         # densité @300K RÉEL : extrapolation de la branche VITREUSE du fit (T réelle, pas rescalée).
         T_ROOM = 300.0
-        dens300, dens300_std = tg_kinetics.rho_at_T(T_ROOM, popt, pcov)
+        dens300_md, dens300_std = tg_kinetics.rho_at_T(T_ROOM, popt, pcov)   # densité MD brute (FF)
+        # CALIBRATION FF : OpenFF Sage est SOUS-DENSE (sous-cohésion ; biais −7.5% systématique sur 12
+        # polymères, physique épuisée — polarizable réfuté). Facteur universel → meilleure estimation de
+        # ρ_exp, qui CASCADE sur n (Lorentz-Lorenz ∝ ρ : le −3% de n n'est QUE le −7% de densité propagé)
+        # et FFV. ⚠ biais FF chimie-dépendant (−2 à −12%) → résiduel ~3% après correction (densité 7.5→2.7%,
+        # n 2.8→1.3% sur le benchmark). Brut conservé (density_300K_md). DENS_FF_CORR=1.0 désactive.
+        dens_corr = float(os.environ.get("DENS_FF_CORR", "1.078"))
+        dens300 = dens300_md * dens_corr if dens300_md else dens300_md
+        dens300_std = (dens300_std * dens_corr) if dens300_std else dens300_std
         dens_extrap = T_ROOM < float(np.min(temps))
         # FFV (gratuit) : fraction de volume libre = 1 − 1.3·V_vdw/V_sp (Bondi). V_vdw = grille RDKit
         # sur la chaîne (bouts négligeables à n=40). Physique (>0) ; convention 1.3 → comparer en RELATIF.
@@ -602,7 +610,8 @@ def main():
              "Tg_pred": round(tg_pred, 1),
              "Tg_pred_ci": round(tg_std / 1.50, 1) if np.isfinite(tg_std) else None,
              "eff_rate": eff_rate,
-             "density_300K": round(dens300, 4),
+             "density_300K": round(dens300, 4),                          # estimation ρ_exp (FF corrigé ×1.078)
+             "density_300K_md": round(dens300_md, 4) if dens300_md else None,  # densité MD brute (FF, sous-dense)
              "density_300K_ci": round(dens300_std, 4) if dens300_std else None,
              "density_300K_extrapolated": bool(dens_extrap),
              "FFV": round(ffv, 4) if ffv is not None else None,        # fraction de volume libre (gratuit)
@@ -698,9 +707,12 @@ def main():
 
         # Dérivés thermo (gratuits) : Cv + grandeurs ISENTROPIQUES via Cp−Cv = T·α_V²/(ρ·κ_T) puis γ=Cp/Cv.
         # ⚠ dépend de la CTE (α_V), peu fiable → flaggés _experimental. (RadonPy les sort aussi du même eq.)
-        if cte_for_thermo is not None and dens300 and K_fluct:
+        # NB: K et CTE sont mesurés à la densité MD (FF) → on utilise dens300_md (brute) ici pour la
+        # COHÉRENCE thermodynamique (Cp−Cv et v_son liés à K à la même densité), pas la densité corrigée.
+        dens_thermo = dens300_md if dens300_md else dens300
+        if cte_for_thermo is not None and dens_thermo and K_fluct:
             aV = cte_for_thermo * 1e-6                                         # CTE volumique (1/K, dédié)
-            dCpv = mech_T * aV ** 2 / (dens300 * 1000.0 * (1.0 / (float(K_fluct) * 1e9))) / 1000.0  # Cp−Cv (J/g/K)
+            dCpv = mech_T * aV ** 2 / (dens_thermo * 1000.0 * (1.0 / (float(K_fluct) * 1e9))) / 1000.0  # Cp−Cv
             cv = cp_jgk - dCpv
             props["Cv_JgK_experimental"] = round(cv, 2)
             if cv:
@@ -708,8 +720,8 @@ def main():
                 Ks = float(K_fluct) * gamma                                   # module isentropique (GPa)
                 props["isentropic_compressibility_1_GPa_experimental"] = round((1.0 / float(K_fluct)) / gamma, 4)
                 props["isentropic_K_GPa_experimental"] = round(Ks, 2)
-                # vitesse du son (bulk) v = √(K_S/ρ) — vraie propriété matériau (dérivée, gratuite)
-                props["sound_velocity_ms"] = round((Ks * 1e9 / (dens300 * 1000.0)) ** 0.5, 0)
+                # vitesse du son (bulk) v = √(K_S/ρ) — ρ MD brute (cohérent avec K mesuré à cette densité)
+                props["sound_velocity_ms"] = round((Ks * 1e9 / (dens_thermo * 1000.0)) ** 0.5, 0)
 
         # Ordre nématique (gratuit) : S = max valeur propre de Q = ⟨(3 u⊗u − I)/2⟩ sur les vecteurs liaison
         # u. 0 = isotrope (amorphe attendu), →1 = aligné. Vérif qualité (pas d'orientation parasite) +
