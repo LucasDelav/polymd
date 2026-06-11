@@ -325,6 +325,63 @@ def thermal_conductivity_nemd(omm_top, omm_system, plat, pos_nm, box_diag_nm, ta
                    "Tmean_hist": Tmean_hist, "Tprofile": [round(float(x), 1) for x in Tprof]}
 
 
+def cp_dos_factor(omm_top, omm_system, plat, pos_nm, box_diag_nm, orig_mass, target_T=300.0):
+    """Facteur de correction QUANTIQUE de Cp (PHYSIQUE, remplace le ÷2.27 calibré).
+    La MD classique compte k_B par mode (équipartition) ; or les modes de vibration HF sont GELÉS
+    quantiquement à 300 K (ℏω≫k_BT) → Cp surestimé. On échantillonne le DOS vibrationnel g(ν) via le
+    spectre de puissance des vitesses (Wiener-Khinchin : g(ν) ∝ Σ_i m_i |v̂_i(ν)|²), puis on pondère
+    chaque mode par la capacité d'Einstein c_E(ν)=x²eˣ/(eˣ−1)², x=hν/k_BT. Facteur = ⟨c_E⟩_g = ∫g·c_E/∫g.
+    Cp_quantique = Cp_classique × facteur, PAR POLYMÈRE (vs ÷2.27 universel). CRUCIAL : masses VRAIES
+    (non-HMR) sinon ω décalées (~×√2). Les C–H contraintes sont absentes du DOS = cohérent (gelées, c_E≈0)."""
+    import openmm
+    from openmm import unit, VerletIntegrator, LangevinMiddleIntegrator
+    from openmm.app import Simulation
+    h = 6.62607015e-34; kB = 1.380649e-23
+    N = omm_system.getNumParticles()
+    hmr = [omm_system.getParticleMass(i).value_in_unit(unit.dalton) for i in range(N)]
+    for i in range(N):
+        omm_system.setParticleMass(i, orig_mass[i] * unit.dalton)
+    box = np.array([float(box_diag_nm[0]), float(box_diag_nm[1]), float(box_diag_nm[2])])
+    dt = 1.0                                          # fs — masses vraies (H léger) → petit pas
+    rec_fs = float(os.environ.get("CP_DOS_REC_FS", "4")); nfr = int(os.environ.get("CP_DOS_FRAMES", "2048"))
+    rec_steps = max(1, int(round(rec_fs / dt)))
+    try:
+        # Langevin FAIBLE (γ=1/ps) tout du long : ne broie que les modes < ~5 cm⁻¹ (où c_E≈1 de toute
+        # façon) → le facteur est inchangé, et on évite l'explosion NVE (config verre froid + dt=1fs).
+        se = Simulation(omm_top, omm_system,
+                        LangevinMiddleIntegrator(target_T * unit.kelvin, 1.0 / unit.picosecond, dt * unit.femtoseconds),
+                        plat)
+        se.context.setPeriodicBoxVectors(*(np.eye(3) * box)); se.context.setPositions(pos_nm * unit.nanometer)
+        se.minimizeEnergy(maxIterations=500)          # enlève les mauvais contacts (sinon NaN)
+        se.context.setVelocitiesToTemperature(target_T * unit.kelvin, 99)
+        se.step(int(5000 / dt))                       # 5 ps d'équilibration
+        Vv = np.empty((nfr, N, 3), dtype=np.float32)
+        for f in range(nfr):
+            se.step(rec_steps)
+            Vv[f] = se.context.getState(getVelocities=True).getVelocities(asNumpy=True).value_in_unit(
+                unit.nanometer / unit.picosecond)
+    finally:
+        for i in range(N):                            # RESTAURE les masses HMR (blocs suivants en dépendent)
+            omm_system.setParticleMass(i, hmr[i] * unit.dalton)
+    Vv -= Vv.mean(axis=0, keepdims=True)              # retire la dérive (composante DC)
+    m = np.array(orig_mass, dtype=np.float64)
+    dos = np.zeros(nfr // 2 + 1)
+    for c0 in range(0, N, 4000):                      # FFT par blocs d'atomes (borne la mémoire)
+        c1 = min(c0 + 4000, N)
+        Pw = (np.abs(np.fft.rfft(Vv[:, c0:c1, :], axis=0)) ** 2).sum(axis=2)   # [freq, atomes]
+        dos += (Pw * m[None, c0:c1]).sum(axis=1)
+    freq = np.fft.rfftfreq(nfr, d=rec_fs * 1e-15)     # Hz
+    x = h * freq / (kB * target_T)
+    with np.errstate(over="ignore", invalid="ignore"):
+        cE = np.where(x > 1e-6, x ** 2 * np.exp(-x) / (-np.expm1(-x)) ** 2, 1.0)   # forme stable (e^-x)
+    cE = np.nan_to_num(cE, nan=0.0)
+    w = dos.copy(); w[0] = 0.0                         # exclut DC
+    factor = float((w * cE).sum() / w.sum())
+    return factor, {"cp_dos_factor": round(factor, 3), "cp_dos_equiv_divisor": round(1.0 / factor, 2),
+                    "dos_mean_cm1": round(float((w * (freq / 2.99792458e10)).sum() / w.sum()), 0),
+                    "nyquist_cm1": round(float(freq[-1] / 2.99792458e10), 0)}
+
+
 def main():
     smiles = os.environ.get("SMILES", "*CC(*)c1ccccc1")
     tg_exp = float(os.environ.get("TG_EXP", "373"))
@@ -383,6 +440,11 @@ def main():
     import openmm
     from openmm import unit, LangevinMiddleIntegrator, MonteCarloBarostat, NonbondedForce
     from openmm.app import Simulation
+    # masses VRAIES (avant HMR) — nécessaires au calcul du DOS pour Cp quantique : HMR déplace la masse
+    # H→lourd, ce qui DÉCALE les fréquences de vibration (atomes lourds allégés → ω ~√2 plus haut) →
+    # un DOS issu d'une dynamique HMR donnerait de mauvaises fréquences. On les conserve telles quelles.
+    orig_mass = [omm_system.getParticleMass(i).value_in_unit(unit.dalton)
+                 for i in range(omm_system.getNumParticles())]
     with P.block("05_hmr"):
         for bond in omm_top.bonds():
             a1, a2 = bond.atom1, bond.atom2
@@ -473,7 +535,28 @@ def main():
     # (équipartition : modes quantiques haute-fréquence non gelés) — pas de correction quantique ici.
     cp_slope = float(np.polyfit(temps, U, 1)[0])                 # kJ/mol(box)/K
     cp_classical = cp_slope * 1000.0 / 6.02214076e23 / mass_g    # J/(g·K) CLASSIQUE (surestimé ~2.3×)
-    cp_jgk = cp_classical / 2.27   # correction classique→quantique (1er ordre, calibré 8 polym., résiduel ~15%)
+    # Cp QUANTIQUE : par DÉFAUT correction PHYSIQUE (DOS vibrationnel × Einstein, par polymère) ;
+    # repli sur le ÷2.27 calibré si le DOS échoue. Validé verres PS/PMMA/PC : MAE 12.3%→3.2% vs ÷2.27.
+    # (≫Tg : Cp exp inclut l'excès configurationnel liquide que la branche vitreuse ne capte pas — limite
+    # commune aux 2 méthodes, ex. PEO@298K>Tg213K.) CP_DOS=0 force le ÷2.27.
+    cp_div227 = cp_classical / 2.27
+    cp_jgk = cp_div227
+    cp_dos_info = {}
+    if os.environ.get("CP_DOS", "1") == "1":
+        try:
+            st_d = sim.context.getState(getPositions=True)
+            pd = st_d.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
+            bd = np.diag(st_d.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer))
+            with P.block("09b_cp_dos"):
+                fac, cp_dos_info = cp_dos_factor(omm_top, omm_system, plat, pd, bd, orig_mass,
+                                                 target_T=float(os.environ.get("MECH_T", "300")))
+            cp_jgk = cp_classical * fac                      # DOS = défaut (physique)
+            cp_dos_info["Cp_JgK_div227"] = round(cp_div227, 3)
+            print(f"   [Cp-DOS] facteur={fac:.3f} (÷{1.0/fac:.2f}) | Cp_DOS={cp_jgk:.3f} (défaut) vs "
+                  f"÷2.27={cp_div227:.3f} J/g/K | DOS moy={cp_dos_info.get('dos_mean_cm1')}cm⁻¹", flush=True)
+        except Exception as e:
+            print(f"   [Cp-DOS] échec ({type(e).__name__}: {e}) → repli ÷2.27", flush=True)
+            cp_dos_info = {}
 
     with P.block("09_tg_fit"):
         tg_hyp, det = tg_kinetics.fit_tg_hyperbola(temps, R)
@@ -528,6 +611,7 @@ def main():
              # C_inf RETIRÉ : non fiable (chaînes effondrées + taille finie 40-mère ; ×0.3 vs exp).
              "Cp_JgK": round(cp_jgk, 2),                               # Cp corrigé (classique ÷2.27)
              "Cp_classical_JgK": round(cp_classical, 2),               # Cp classique brut (surestimé)
+             **cp_dos_info,                                            # Cp_JgK_dos + facteur (si CP_DOS=1)
              "refractive_index": round(n_refr, 3) if n_refr else None, # indice de réfraction (gratuit)
              "CTE_glass_ppmK_experimental": cte_glass,    # dilatation volumique vitreuse — ⚠ NON VALIDÉE
              "CTE_melt_ppmK_experimental": cte_melt,      #   (r≈−0.46 vs exp) ; exposée pour parité largeur
@@ -541,11 +625,19 @@ def main():
     # On trempe donc d'abord de t_low → MECH_T.
     if do_mech:
         mech_T = float(os.environ.get("MECH_T", "300"))
+        # DIAGNOSTIC physique (MECH_P_BAR > 1) : on comprime le verre à pression ÉLEVÉE pour le ramener
+        # vers la DENSITÉ EXP (le FF est sous-dense ~5-8% → verre mou → E sous-estimé). Si K/E remontent
+        # vers l'exp à densité exp, la cause est la sous-densité (pas le FF intrinsèque). 1 bar = défaut.
+        mech_p = float(os.environ.get("MECH_P_BAR", "1.0"))
         kT = 1.380649e-23 * mech_T                  # J
         # K via fluctuations de volume (NPT court au verre, à MECH_T).
         with P.block("10_K_volfluct"):
             ig.setTemperature(mech_T * unit.kelvin); sim.context.setParameter(baro.Temperature(), mech_T)
+            sim.context.setParameter(baro.Pressure(), mech_p * unit.bar)
             sim.step(60 * spp)                       # trempe t_low→MECH_T + ré-équilibre (densifie)
+            if mech_p > 1.0:                          # densité atteinte sous la pression imposée (diag)
+                Vp = sim.context.getState().getPeriodicBoxVolume().value_in_unit(unit.nanometer**3) * 1e-21
+                props["density_mechP"] = round(mass_g / Vp, 4); props["mech_P_bar"] = mech_p
             Vs = []
             for _ in range(40):                      # NB: K par fluctuations de volume = IMPRÉCIS/dispersé
                 sim.step(2 * spp)                    # (sensible à la longueur de sampling) → flaggé ⚠ dans la CLI
@@ -666,8 +758,9 @@ def main():
                 for idx in reversed(range(omm_system.getNumForces())):   # retire le barostat isotrope
                     if isinstance(omm_system.getForce(idx), MonteCarloBarostat):
                         omm_system.removeForce(idx)
-                # barostat anisotrope : relaxe X,Y à 1 bar, NE scale PAS Z (piloté par nous).
-                abaro = MonteCarloAnisotropicBarostat(Vec3(1.0, 1.0, 1.0) * unit.bar,
+                # barostat anisotrope : relaxe X,Y à mech_p bar (=1 défaut ; >1 = diag densité exp),
+                # NE scale PAS Z (piloté par nous).
+                abaro = MonteCarloAnisotropicBarostat(Vec3(mech_p, mech_p, mech_p) * unit.bar,
                                                       mech_T * unit.kelvin, True, True, False, 25)
                 omm_system.addForce(abaro)
                 igT = LangevinMiddleIntegrator(mech_T * unit.kelvin, 1.0 / unit.picosecond, DT * unit.femtoseconds)

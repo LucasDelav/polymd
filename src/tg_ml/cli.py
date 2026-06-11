@@ -403,7 +403,7 @@ PROP_META = {
     "Rg_nm":                 ("Rayon de giration",          "nm",       "[yellow]🟡 borne basse (chaînes effondrées)"),
     "Ree_nm":                ("Distance bout-à-bout",       "nm",       "[yellow]🟡 borne basse (chaînes effondrées)"),
     "nematic_order":         ("Ordre nématique",            "—",        "[green]✅ (≈0 = amorphe)"),
-    "Cp_JgK":                ("Cp",                         "J/g/K",    "[green]✅ corrigé ÷2.27 (~15%)"),
+    "Cp_JgK":                ("Cp",                         "J/g/K",    "[green]✅ quantique-DOS (~3% verres)"),
     "Cv_JgK_experimental":   ("Cv",                         "J/g/K",    "[yellow]⚠️ dérivé (dépend CTE)"),
     # mécanique
     "K_GPa":                 ("Module de compression K",    "GPa",      "[yellow]🟡 dispersé (fluct. de volume)"),
