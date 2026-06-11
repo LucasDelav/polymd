@@ -81,8 +81,15 @@ def build_oligomer(repeat_smiles: str, n_units: int, tacticity: str = "atactic")
     # → la distance-geometry échoue et re-tente sans fin → embed bloqué à 100 % CPU en C++ (le timeout
     # SIGALRM de l'appelant est impuissant face à un appel C++ qui ne rend pas la main). En remplissant
     # tous les '?', on supprime cet échantillonnage interne → embed déterministe et fini.
-    undefined = [i for i, lab in Chem.FindMolChiralCenters(
-        mol, includeUnassigned=True, useLegacyImplementation=False) if lab == "?"]
+    centers = Chem.FindMolChiralCenters(mol, includeUnassigned=True, useLegacyImplementation=False)
+    undefined = [i for i, lab in centers if lab == "?"]
+    has_defined = any(lab in ("R", "S") for _, lab in centers)   # stéréo dessinée → à préserver
+    # Cycles FUSIONNÉS (atome dans ≥2 cycles, ex. acétal bicyclique) : pour ceux-là, l'embed SANS
+    # imposer la chiralité est PLUS lent/instable (ETKDG explore librement des jonctions infaisables)
+    # → on garde l'embed imposé (avec _assign_stereo) qui leur donne une cible cis claire. Le fast-path
+    # ne s'applique qu'aux chaînes à cycles ISOLÉS/pendants (phényl du PS) ou sans cycle.
+    uri = unit.GetRingInfo()
+    fused_rings = any(uri.NumAtomRings(i) >= 2 for i in range(unit.GetNumAtoms()))
 
     def _assign_stereo(attempt: int) -> None:
         rng = np.random.default_rng(RANDOM_SEED + attempt)
@@ -97,32 +104,43 @@ def build_oligomer(repeat_smiles: str, n_units: int, tacticity: str = "atactic")
                 Chem.ChiralType.CHI_TETRAHEDRAL_CW if cw else Chem.ChiralType.CHI_TETRAHEDRAL_CCW)
         Chem.AssignStereochemistry(mol, cleanIt=True, force=True)
 
+    # Conformère initial COMPACT (pelote globulaire) : useRandomCoords + MMFF. (Cf compact-builder :
+    # un ETKDG étendu → boîte énorme quasi-vide → MD lente ; seule la COMPACITÉ compte, la MD relaxe.)
     mol = Chem.AddHs(mol)
-    # Conformère initial COMPACT (pelote globulaire) pour TOUTES les tailles : `useRandomCoords`
-    # + MMFF minimise le rayon englobant → boîte de packing raisonnable + build rapide.
-    # PIÈGE CORRIGÉ : ETKDG (sans random-coords) génère des pelotes RÉALISTES ÉTENDUES (gros rayon)
-    # → pack_box fabrique une boîte ÉNORME quasi-vide (PP : rayon 31Å → boîte 392Å, densité 0.008)
-    # → grille PME géante → MD ~5× plus lente + compression interminable. Le conformère initial
-    # n'a AUCUNE importance physique (la MD le réorganise) : seule sa COMPACITÉ compte ici.
     params = AllChem.ETKDGv3()
     params.randomSeed = RANDOM_SEED
     params.useRandomCoords = True
-    params.maxIterations = 2000
-    # Un tirage stéréo atactic peut tomber sur une combinaison de jonctions impossible → embed qui
-    # échoue (rc != 0). On retente avec une AUTRE graine stéréo, puis on se rabat sur iso (tout-CW,
-    # toujours embeddable) en dernier recours. iso/syndio sont déterministes : une seule tentative.
-    n_try = 1 if tacticity in ("iso", "syndio") else 4
-    embedded = False
-    for attempt in range(n_try):
-        _assign_stereo(attempt)
-        if AllChem.EmbedMolecule(mol, params) == 0:
-            embedded = True
-            break
-    if not embedded:                               # repli robuste : centres indéfinis → tout-CW (iso)
-        for ci in undefined:
-            mol.GetAtomWithIdx(ci).SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CW)
-        Chem.AssignStereochemistry(mol, cleanIt=True, force=True)
-        AllChem.EmbedMolecule(mol, params)
+    params.maxIterations = 400
+
+    if tacticity == "atactic" and not has_defined and not fused_rings:
+        # ── FAST PATH (défaut : atactique, aucune stéréo dessinée, pas de cycles fusionnés) ──
+        # IMPOSER la chiralité sur 40+ centres de la chaîne rend l'embed PATHOLOGIQUE (PS 40-mère :
+        # >5 min, jusqu'à ~50 min avec les retries). Or pour de l'atactique sans stéréo à préserver,
+        # inutile de l'imposer : enforceChirality=False → embed ~25× plus rapide (PS ~2 min) et ETKDG
+        # produit une chiralité ALÉATOIRE par centre = atactique par nature. On re-perçoit la stéréo
+        # depuis la 3D (tags ↔ géométrie). BONUS : supprime aussi le hang des cycles fusionnés (plus
+        # d'échantillonnage de jonctions trans impossibles).
+        params.enforceChirality = False
+        if AllChem.EmbedMolecule(mol, params) != 0:        # très rare → repli imposé
+            params.enforceChirality = True
+            _assign_stereo(0); AllChem.EmbedMolecule(mol, params)
+        else:
+            Chem.AssignStereochemistryFrom3D(mol)
+    else:
+        # ── iso/syndio OU stéréo dessinée : on IMPOSE les tags (avec retries + repli iso tout-CW) ──
+        # Un tirage atactic+défini peut échouer (rc != 0) → on retente avec une autre graine stéréo.
+        n_try = 1 if tacticity in ("iso", "syndio") else 4
+        embedded = False
+        for attempt in range(n_try):
+            _assign_stereo(attempt)
+            if AllChem.EmbedMolecule(mol, params) == 0:
+                embedded = True
+                break
+        if not embedded:
+            for ci in undefined:
+                mol.GetAtomWithIdx(ci).SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CW)
+            Chem.AssignStereochemistry(mol, cleanIt=True, force=True)
+            AllChem.EmbedMolecule(mol, params)
     AllChem.MMFFOptimizeMolecule(mol, maxIters=200)
     return mol
 
