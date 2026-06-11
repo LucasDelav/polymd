@@ -675,10 +675,31 @@ def main():
         props["K_GPa_ci"] = round(K_ci, 2)
         props["compressibility_1_GPa"] = round(1.0 / float(K_fluct), 4)   # κ = 1/K (gratuit)
 
+        # CTE VITREUX DÉDIÉ (room-T) : NPT à 280/300/320 K → α_V = (1/V₃₀₀)·dV/dT. PLUS FIABLE que la pente
+        # de la branche vitreuse du fit de refroidissement : ses paliers sont près de Tg_sim (verre "frais",
+        # encore mou → CTE surestimée ~2×, PS ~460 vs exp ~210 ppm/K). Ici on mesure au VRAI verre froid.
+        cte_roomT = None
+        with P.block("10e_cte_roomT"):
+            sim.context.setParameter(baro.Pressure(), 1.0 * unit.bar)   # CTE au repos (1 bar), pas comprimé
+            # span LARGE (270-330K, signal ΔV/V ~ +50%) car dV/dT est un petit signal et le V du verre est
+            # autocorrélé (N effectif faible) ; équilibration plus longue (le volume du verre relaxe lentement).
+            Tcte = [270.0, 290.0, 310.0, 330.0]; Vcte = []
+            for Tc in Tcte:
+                ig.setTemperature(Tc * unit.kelvin); sim.context.setParameter(baro.Temperature(), Tc)
+                sim.step(50 * spp)                       # ré-équilibre (verre lent)
+                vv = [sim.context.getState().getPeriodicBoxVolume().value_in_unit(unit.nanometer**3)
+                      for _ in range(30) if not sim.step(2 * spp)]
+                Vcte.append(float(np.mean(vv)))
+            V300 = float(np.interp(300.0, Tcte, Vcte))
+            cte_roomT = float(np.polyfit(Tcte, Vcte, 1)[0]) / V300 * 1e6   # ppm/K volumétrique
+        props["CTE_glass_ppmK"] = round(cte_roomT, 1)
+        print(f"   [CTE] vitreux dédié 270-330K = {cte_roomT:.0f} ppm/K (vs fit-refroidiss. {cte_glass})", flush=True)
+        cte_for_thermo = cte_roomT if cte_roomT else cte_glass    # le dédié alimente les dérivés thermo
+
         # Dérivés thermo (gratuits) : Cv + grandeurs ISENTROPIQUES via Cp−Cv = T·α_V²/(ρ·κ_T) puis γ=Cp/Cv.
         # ⚠ dépend de la CTE (α_V), peu fiable → flaggés _experimental. (RadonPy les sort aussi du même eq.)
-        if cte_glass is not None and dens300 and K_fluct:
-            aV = cte_glass * 1e-6                                              # CTE volumique (1/K)
+        if cte_for_thermo is not None and dens300 and K_fluct:
+            aV = cte_for_thermo * 1e-6                                         # CTE volumique (1/K, dédié)
             dCpv = mech_T * aV ** 2 / (dens300 * 1000.0 * (1.0 / (float(K_fluct) * 1e9))) / 1000.0  # Cp−Cv (J/g/K)
             cv = cp_jgk - dCpv
             props["Cv_JgK_experimental"] = round(cv, 2)
