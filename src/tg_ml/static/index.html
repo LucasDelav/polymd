@@ -243,7 +243,7 @@ const I18N = {
     err_invalid:"Invalid PSMILES.", err_ssh:"CRIANN connection error.",
     res_title:"Predicted properties", res_unreliable:"⚠ Unreliable Tg fit",
     res_seeds_note:"Mean over {n} seeds · ± = standard error σ/√N · reliable fits {r}/{n}",
-    res_perseed:"Tg per seed: {d}",
+    res_perseed:"Tg per seed: {d}", btn_download:"⬇ Download JSON",
     noprops:"No properties (job failed?).",
     // property labels
     Tg_pred:"Predicted Tg", Tg_sim:"Simulated Tg (before ÷1.50)", density_300K:"Density @300K",
@@ -305,7 +305,7 @@ const I18N = {
     err_invalid:"PSMILES invalide.", err_ssh:"Erreur de connexion CRIANN.",
     res_title:"Propriétés prédites", res_unreliable:"⚠ Fit Tg peu fiable",
     res_seeds_note:"Moyenne sur {n} graines · ± = erreur-type σ/√N · fits fiables {r}/{n}",
-    res_perseed:"Tg par graine : {d}",
+    res_perseed:"Tg par graine : {d}", btn_download:"⬇ Télécharger le JSON",
     noprops:"Aucune propriété (job échoué ?).",
     Tg_pred:"Tg prédite", Tg_sim:"Tg simulée (avant ÷1.50)", density_300K:"Densité @300K",
     CTE_glass_ppmK_experimental:"CTE (vitreux)", FFV:"Volume libre",
@@ -483,9 +483,11 @@ async function run(){
     else if(m.done){ es.close(); go.disabled=false; setStatus(t('r_done'),'ok'); render(m.props,m.per_seed_tg); } };
   es.onerror=()=>{ es.close(); go.disabled=false; };
 }
+let lastResult=null;
 function render(p,perSeed){
   const r=document.getElementById('results'); r.classList.remove('hidden');
-  if(!p){ r.innerHTML='<span class="err">'+t('noprops')+'</span>'; return; }
+  if(!p){ r.innerHTML='<span class="err">'+t('noprops')+'</span>'; lastResult=null; return; }
+  lastResult=p;                                       // JSON complet (toutes les clés) pour le téléchargement
   let h='<h3>'+t('res_title')+'</h3><table>';
   for(const [k,u] of PROPS){ if(p[k]==null) continue; const ci=p[k+'_ci'];
     h+='<tr><td>'+t(k)+'</td><td class="v">'+p[k]+(ci?' ± '+ci:'')+'</td><td class="dim">'+u+'</td></tr>'; }
@@ -494,7 +496,16 @@ function render(p,perSeed){
   if(perSeed){ const d=Object.keys(perSeed).map(s=>'s'+s+'='+perSeed[s]).join(', ');
     h+='<div class="dim" style="font-size:12px">'+t('res_perseed',{d:d})+'</div>'; }
   if(p.fit_reliable===false) h+='<div class="warn" style="margin-top:8px;font-size:12px">'+t('res_unreliable')+(p.fit_recommendation?' — '+escapeHtml(p.fit_recommendation):'')+'</div>';
+  h+='<button class="btn-sec" onclick="downloadJson()" data-i18n="btn_download">'+t('btn_download')+'</button>';
   r.innerHTML=h;
+}
+function downloadJson(){                               // enregistre le JSON de résultat sur le PC de l'utilisateur
+  if(!lastResult) return;
+  const smi=(val('smiles')||'polymd').replace(/[^A-Za-z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,40)||'polymd';
+  const blob=new Blob([JSON.stringify(lastResult,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download='polymd_'+smi+'.json';
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
 }
 </script>
 </body>
