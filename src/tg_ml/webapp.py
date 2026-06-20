@@ -1,9 +1,9 @@
-"""Webapp LOCALE pour le pipeline MD : dessine le motif (éditeur JSME) + paramètres → soumet sur
+"""Webapp LOCALE pour le pipeline MD : dessine le motif (éditeur Ketcher) + paramètres → soumet sur
 CRIANN → logs en direct → tableau des propriétés. RÉUTILISE tout le backend de cli.py (validation,
 drapeau de risque, fenêtre, soumission, parsing). Le calcul reste sur CRIANN (le laptop ne calcule pas).
 
 Lancer :  uv run tgweb   → ouvre http://127.0.0.1:8000
-L'éditeur de molécule est JSME (open-source, chargé depuis CDN) ; swappable par Ketcher (Apache-2.0).
+L'éditeur de molécule est Ketcher (Apache-2.0), servi LOCALEMENT depuis static/ketcher/standalone/.
 """
 from __future__ import annotations
 

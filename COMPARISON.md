@@ -7,7 +7,10 @@ MD classique (RadonPy/SPACIER, ensemble-MD), DFT-QSPR, et champs de force ML ab-
 
 Synthèse appuyée sur une revue multi-agent adversariale (25 affirmations testées, 20 confirmées,
 5 réfutées) + recherches ciblées MLIP. Toutes les sources sont primaires (peer-reviewed / dépôts officiels).
-Nos chiffres polymd : voir [BENCHMARK.md](BENCHMARK.md) (12 polymères).
+Nos chiffres polymd : les propriétés *du pipeline par défaut* (Tg hyperbole mono-fenêtre, densité, Cp…)
+sont benchmarkées dans [BENCHMARK.md](BENCHMARK.md) (12 polymères) ; la **méthode Tg aveugle** (coude
+densité + Prigogine-Defay + confiance par angle, driver `scripts/blind_tg.py`) est validée à part sur
+**100 polymères** (49 dérivés de sucres + 51 classiques), médiane ≈ 16 K.
 
 ---
 
@@ -15,7 +18,7 @@ Nos chiffres polymd : voir [BENCHMARK.md](BENCHMARK.md) (12 polymères).
 
 | Propriété | **polymd** | Meilleur concurrent honnête (n, protocole) | Verdict |
 |---|---|---|---|
-| **Tg** | ~13 K (multi-seed) | Ensemble-MD JCTC 2025 **11–17.7 K** (6 époxydes) ; Polymer Genome GPR **18.8 K** (n=5076, CV 5-fold) ; Lieconv-Tg 24.4 K (n=7166, split aléatoire = fuite légère) | 🟢 **au plancher du réaliste** |
+| **Tg** | médiane ≈16 K aveugle (≈13 K FF-tractable), 100 polymères | Ensemble-MD JCTC 2025 **11–17.7 K** (6 époxydes) ; Polymer Genome GPR **18.8 K** (n=5076, CV 5-fold) ; Lieconv-Tg 24.4 K (n=7166, split aléatoire = fuite légère) | 🟢 **au plancher du réaliste** |
 | **Densité** | 2.7 % (~0.03 g/cm³) | claim "ML GPR 0.03 g/cc" **RÉFUTÉE (0-3)** ; RadonPy R²~0.89 | 🟢 **personne ne nous bat clairement** |
 | **Indice n** | ~1.3 % (~0.02) | SPACIER/RadonPy MAE **0.02** / R²0.92 (calibré n=26) ; ML Ramprasad RMSE 0.05 | 🟢 **= MD-SOTA, bat le ML** |
 | **Cp (cap. calorifique)** | ~5 % (verres) | SPACIER/RadonPy **R²0.61 seulement** (n=72) ; Polymer Genome n=80 (affamé) | 🟢 **on attaque LE point faible MD** |
@@ -45,7 +48,7 @@ cœur thermophysique**.
 |---|---|---|---|
 | MD classique haut-débit | **RadonPy / SPACIER** (GAFF2/LAMMPS) | n, densité | **×100–300 plus cher** ; Cp R²0.61 |
 | Descripteurs + GPR | **Polymer Genome** | diélectrique, module | CV-optimisme ; ne généralise pas hors domaine |
-| Ensemble-MD | **JCTC 2025** (Patrone) | Tg 11–17.7 K | = **notre méthode** (valide notre multi-seed) |
+| Ensemble-MD | **JCTC 2025** (Patrone) | Tg 11–17.7 K | = **notre méthode** (valide notre approche multi-fenêtres poolée) |
 | Transformers/GNN | polyBERT, TransPolymer | électronique, vitesse | pas le bulk thermo-méca |
 
 ---
@@ -71,7 +74,7 @@ cœur thermophysique**.
 
 1. **« Un ML fait Tg sub-10 K »** → **fuite de données** (augmentation SMILES, motifs dupliqués
    train/test ; PI1M n'apporte aucune donnée exp nouvelle). Les Tg honnêtes plafonnent à **13–25 K**.
-   Notre 13 K est au plancher.
+   Notre médiane ~16 K aveugle (≈13 K sur les polymères FF-tractables) est au plancher.
 2. **« Polymer Genome bat le diélectrique/module »** → vrai, mais sur **CV 5-fold** (optimisme), petits
    jeux (module n=629), et **ne généralise pas** aux chimies nouvelles. Nous : zéro entraînement.
 3. **« SPACIER plus précis sur n »** → égalité (0.02), mais **calibré in-sample sur 26 polymères** et

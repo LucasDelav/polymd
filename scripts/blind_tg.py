@@ -3,10 +3,11 @@
 
   VK group-contribution seed  →  3-window pooled wide scan (ρ, D, ⟨u²⟩, U per palier)
   →  ⟨u²⟩ shape drives FONDU re-centering (window placement)
-  →  ★ THE RECIPE (blind_tg_recipe): Tg VALUE from the density ρ(T) coude (q_melt 0.45);
-     CONFIDENCE tier from the diffusion D(T) branch ANGLE (≥48°=haute). Validated 45 mols:
-     haute MAE 28/méd 20K; basse catches the window-misplacement catastrophes. Replaces the
-     old contrast-based confidence() flag (kept only as legacy fallback when ρ/D are absent).
+  →  ★ THE RECIPE (blind_tg_recipe): Tg VALUE from the density ρ(T) coude (q_melt 0.45)
+     + Prigogine-Defay ρ+0.20·(U−ρ); CONFIDENCE tier from the diffusion D(T) branch ANGLE
+     (≥48°=haute). Validated blind: median ≈16 K on 49 sugar-derived + 51 classic polymers
+     (≈13 K force-field-tractable). Replaces the old contrast-based confidence() flag
+     (kept only as legacy fallback when ρ/D are absent).
 
 Usage:
   blind_tg.py "*OCCCOC(*)=O"                 # one PSMILES
@@ -15,12 +16,12 @@ Usage:
 This is the reference orchestration of src/tg_ml/tg_blind.py over the cluster; it
 reuses tg_ml.cli.submit / wait_for_jobs. See reference-tg-prediction-method memory.
 """
-import argparse, json, sys, time, glob
+import argparse, json, sys, time
 import numpy as np
 
 sys.path.insert(0, "src"); sys.path.insert(0, "scripts")
 from tg_ml.tg_blind import (parse_curves, blind_estimate, recenter_target,
-                            blind_tg_recipe, confidence, CAL)
+                            blind_tg_recipe, CAL)
 from tg_ml.cli import submit, _ssh, REMOTE_ROOT
 from vk_centerer import features as vk_features
 

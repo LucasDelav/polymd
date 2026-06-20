@@ -1,29 +1,27 @@
-"""Blind Tg extraction: window-center-independent pooled asymptote-intersection
-+ two self-consistency layers that flag/repair a mis-placed window WITHOUT ever
-using the experimental Tg.
+"""Blind Tg: find the glass transition from MD cooling curves WITHOUT ever using the
+experimental Tg. The single window-center-independent trick is to POOL several offset
+cooling windows into one wide scan and intersect the glassy and melt asymptotes, fit
+FAR from Tg (a single window's local breakpoint just tracks the window centre, pull ~0.9).
 
-WHY: a single MD cooling window gives a Tg estimate that TRACKS the window center
-(pull ~0.9) — the kinetically-broadened transition has no sharp local breakpoint.
-Pooling several offset windows into one wide scan and intersecting the glassy and
-melt asymptotes (fit far from Tg) removes that center-dependence. Two mechanisms
-then handle a window placed so far off that the transition is at/outside it:
+★ THE RECIPE — `blind_tg_recipe` (driven by scripts/blind_tg.py over several windows):
+  • VALUE  = the DENSITY coude: two-tangent glass×melt asymptote crossing of ρ(T)
+    (`pooled_intersection`, asymmetric q_melt≈0.45), nudged toward the caloric (enthalpy)
+    Tg by a universal PRIGOGINE-DEFAY term ρ + 0.20·(U−ρ) (K_DECOUPLE) — the volume/enthalpy
+    response decouples with fragility, correcting part of the per-polymer kinetic spread.
+  • CONFIDENCE = the diffusion-coude ANGLE (`confidence_angle`/`converged`): the more
+    orthogonal the glassy (D≈0) and melt branches of D(T), the sharper the real transition.
+    Convergence EXTENDS COVERAGE (adds windows, not seeds — the angle is seed-stable).
+  Validated blind: median ≈16 K on 49 sugar-derived + 51 classic polymers (≈13 K on
+  force-field-tractable / non-H-bonding polymers).
 
-  Layer 1 (shape + FONDU recenter): a weak pooled slope contrast and/or the
-    intersection jammed at a scan edge => the knee is outside the window. When the
-    per-window engine emits a FONDU recommendation ("relance --tg-prior XXX") we
-    re-center on that concrete target. Validated: recovers 5/6 gross mis-placements.
-  confidence(): a blind self-consistency score (contrast, ⟨u²⟩-vs-U agreement, knee
-    position, FONDU). It does NOT change the value — it flags which answers to
-    distrust. This surfaces the residual hard case (a knee sitting shape-invisibly
-    on the cold edge, e.g. oxy33) rather than silently mis-reporting it.
+LEGACY fallbacks kept below (used only when ρ/D are absent, e.g. old runs): `blind_estimate`
+(⟨u²⟩/U asymptote average), `confidence()` (contrast/⟨u²⟩-vs-U tier), `shape_flags`/
+`recenter_target` (FONDU re-centering). REJECTED (do NOT re-add): an invariance auto-fix
+that re-centers a blind scan on its OWN estimate — it cannot reach a far knee and a
+cold-heavy probe biases every estimate low.
 
-REJECTED (do not re-add): an invariance auto-fix that re-centers a blind scan on
-its OWN estimate. Tested — it cannot reach a far-away knee, and a cold-heavy probe
-biases every estimate low (corrupted good cases, MAE 43K vs 18.6K). There is no
-blind auto-correction for a shape-invisible edge knee; confidence() is the answer.
-
-All temperatures here are SIMULATION temperatures (Tg_sim); divide by the kinetic
-factor CAL=1.50 for the experimental prediction. See reference-tg-prediction-method.
+All temperatures here are SIMULATION temperatures (Tg_sim); divide by CAL=1.50 for the
+experimental prediction. See reference-tg-prediction-method.
 """
 from __future__ import annotations
 import json
@@ -60,9 +58,10 @@ def _grab_array(txt, key):
 
 
 def parse_curves(text):
-    """Extract the pooled-able observables from one pipeline run's stdout.
-    Returns dict {'u2': (T[], <u2>[]), 'U': (T[], U[])} plus a 'fondu' flag and
-    any engine re-center target. ⟨u²⟩ per palier = the cage plateau (last MSD lag)."""
+    """Extract the pooled-able observables from one pipeline run's stdout. Returns
+    dict {'u2','U','rho','D': (T[], y[])} (whichever are present) plus a 'fondu' flag
+    and any engine re-center target. ⟨u²⟩ per palier = the cage plateau (last MSD lag);
+    'rho'=density ρ(T), 'D'=diffusion D(T) (both need MSD_TG=1 in the pipeline)."""
     out = {"curves": {}, "fondu": False, "fondu_target": None}
     msd = _grab_array(text, "MSD_T")
     if msd:
@@ -147,8 +146,9 @@ def pooled_intersection(T, y, q=0.30, q_melt=None):
 
 
 def blind_estimate(curves, q=0.30):
-    """curves: {observable: (T[], y[])}, e.g. {'u2': (...), 'U': (...)}.
-    Average the per-observable intersections. Returns (Tg_sim, info)."""
+    """LEGACY ⟨u²⟩/U-only estimator (the current value path is blind_tg_recipe = density
+    coude). Averages the ⟨u²⟩ and U asymptote intersections ONLY (skips rho/D); still used
+    to drive FONDU re-centering on the ⟨u²⟩ shape. Returns (Tg_sim, info)."""
     ests, infos = {}, {}
     for name, (T, y) in curves.items():
         if name not in ("u2", "U"):          # ρ/D handled by blind_tg_recipe (own q_melt) — don't mix
@@ -173,9 +173,10 @@ def blind_estimate(curves, q=0.30):
 
 
 def blind_tg_recipe(curves, q_rho=0.45, q_diff=0.50):
-    """★ THE VALIDATED RECIPE (2026-06): Tg VALUE from the density ρ(T) coude (q_melt q_rho),
-    CONFIDENCE TIER from the diffusion D(T) branch ANGLE (q_melt q_diff). On the 20-mol
-    convergence run: converged (angle≥48°) → density MAE 30/médiane 16K; non-converged → 72K.
+    """★ THE VALIDATED RECIPE: Tg VALUE from the density ρ(T) coude (q_melt q_rho) + the
+    Prigogine-Defay term ρ+K_DECOUPLE·(U−ρ); CONFIDENCE TIER from the diffusion D(T) branch
+    ANGLE (q_melt q_diff; ≥48° → haute via confidence_angle). Validated blind: median ≈16 K
+    on 49 sugar-derived + 51 classic polymers (≈13 K on force-field-tractable ones).
     Falls back to ⟨u²⟩ for the value and contrast-confidence if ρ/D are absent (legacy runs).
     Returns (Tg_pred_C | None, info) with info['tier','angle_deg','value_obs','Tg_sim','reasons'].
     """

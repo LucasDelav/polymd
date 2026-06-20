@@ -395,7 +395,7 @@ def parse_props(log: str) -> Optional[dict]:
 # label, unité, fiabilité (cf PIPELINE.md)
 PROP_META = {
     # thermique / structure
-    "Tg_pred":               ("Tg prédite",                 "K",        "[green]✅ fiable (MAE ~13 K, 30 polym.)"),
+    "Tg_pred":               ("Tg prédite",                 "K",        "[green]✅ fiable (estimation en-run, fenêtre centrée)"),
     "Tg_sim":                ("Tg simulée (avant ÷1.50)",   "K",        "[dim]info"),
     "density_300K":          ("Densité @300 K",             "g/cm³",    "[green]✅ FF corrigé ×1.078 (~3 %)"),
     "density_300K_md":       ("Densité @300 K (MD brute)",  "g/cm³",    "[dim]info (FF sous-dense ~−7 %)"),
@@ -569,7 +569,7 @@ def _collect_env(smiles, box_a, n_units, t_step, equil_ps, sample_ps,
 
 
 # ───────────────────────── Multi-seed (réduire l'incertitude) ─────────────────────────
-AGG_KEYS = ["Tg_sim", "Tg_pred", "density_300K", "CTE_glass_1e6", "K_GPa",
+AGG_KEYS = ["Tg_sim", "Tg_pred", "density_300K", "CTE_glass_ppmK", "K_GPa",
             "FFV", "Rg_nm", "Ree_nm", "refractive_index", "Cp_JgK", "solubility_delta"]
 
 

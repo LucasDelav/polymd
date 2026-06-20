@@ -1,13 +1,15 @@
-"""Analyse cinétique de la Tg : extraction par fit HYPERBOLIQUE (Patrone) de ρ(T) à
-chaque vitesse de refroidissement, puis EXTRAPOLATION vers la vitesse expérimentale.
+"""Extraction de la Tg en-run pour pipeline.py : fit HYPERBOLIQUE (Patrone) de ρ(T) sur la
+fenêtre de refroidissement, + flags de fiabilité/justesse + Cp quantique (DOS). C'est
+l'estimation RAPIDE du pipeline ; la prédiction aveugle autoritaire est dans tg_blind.py.
 
-Ancré sur :
-  - Afzal et al., ACS Appl. Polym. Mater. 2021, 3, 620 (fit hyperbolique, densité/CTE).
-  - Soldera & Metatla, Phys. Rev. E 74, 061803 (2006) (extrapolation WLF, Éq. 2).
-  - Buchholz, Paul, Binder, J. Chem. Phys. 117, 7364 (2002) (dépendance log(vitesse)).
+La Tg est cinétique : Tg(q) ↑ avec la vitesse de refroidissement q ; la MD (~10¹¹-10¹³ K/s)
+surestime de ~80-120 K vs l'expérience. La PRODUCTION applique un facteur universel plat
+Tg_exp ≈ Tg_sim / 1.50 (pas de WLF). Les fonctions WLF/VFT plus bas (wlf_shift, vft_tg_of_q,
+fit_vft_extrapolate, predict_tg) sont des extrapolateurs multi-vitesses EXPÉRIMENTAUX, NON
+utilisés par le pipeline (l'échelle multi-vitesses s'est révélée non résoluble à notre compute).
 
-La Tg est cinétique : Tg(q) ↑ avec la vitesse de refroidissement q. La MD (~10¹¹-10¹³ K/s)
-surestime de ~80-120 K vs l'expérience (~0.17 K/s). On corrige via WLF.
+Ancré sur : Afzal et al., ACS APM 2021, 3, 620 (fit hyperbolique) ; Soldera & Metatla, PRE 74,
+061803 (2006) (WLF) ; Buchholz, Paul, Binder, JCP 117, 7364 (2002) (dépendance log-vitesse).
 """
 from __future__ import annotations
 import numpy as np
@@ -196,7 +198,9 @@ def accuracy_flags(psmiles, tg_sim, t_lo, t_hi, t_step):
 
 
 def confidence(fit_reliable, accuracy_risk):
-    """Combine PRÉCISION (fit_reliable) et JUSTESSE (accuracy_risk) en un niveau unique.
+    """Tier de confiance EN-RUN du pipeline (contraste/justesse du fit mono-fenêtre).
+    DISTINCT de la confiance par angle de la méthode aveugle (tg_blind.confidence_angle).
+    Combine PRÉCISION (fit_reliable) et JUSTESSE (accuracy_risk) en un niveau unique.
     haute = fit stable ET aucun risque de biais ; basse = les deux en défaut ; moyenne sinon."""
     if fit_reliable and accuracy_risk == "faible":
         return "haute"

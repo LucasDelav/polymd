@@ -12,8 +12,12 @@ SORTIES :
     diélectrique statique + auto-diffusion (DIELECTRIC=1) : sampling long 300 K (~400 ps).
 
 MÉTHODE : build compact + OpenFF Sage + HMR 4fs → compression → fonte → refroidissement PAR PALIERS
-(P1 : 20 K/palier, 100+50 ps) sur fenêtre étroite centrée sur 1.5×Tg_exp → fit hyperbolique de ρ(T)
-→ Tg_sim → ÷1.50. PLANCHER : ~48k atomes nécessaires (le coude ρ(T) est un signal faible, SNR
+(P1 : 20 K/palier, 100+50 ps), en enregistrant PAR PALIER ρ(T) (RHO_T), enthalpie U(T) (U_T), et —
+si MSD_TG=1 — mobilité de cage ⟨u²⟩ (MSD_T) et diffusion D(T) (D_T). Le Tg en-run est une estimation
+RAPIDE (fit hyperbolique de ρ(T) sur la fenêtre courante → ÷1.50). La prédiction Tg AUTORITAIRE vient
+de la méthode AVEUGLE (src/tg_ml/tg_blind.py, pilotée par scripts/blind_tg.py) qui poole plusieurs
+fenêtres de ces courbes : coude densité + correction Prigogine-Defay, confiance par l'angle du coude
+de diffusion. PLANCHER : ~48k atomes nécessaires (le coude ρ(T) est un signal faible, SNR
 ∝ √(atomes×temps) ; sous 48k le fit latche). Donc pas plus rapide sans perdre la robustesse.
 
 USAGE :
@@ -630,8 +634,9 @@ def main():
             # l'hyperbole qui a justement déclenché le repli.
             hyp_std = det.get("tg_std", float("nan"))
             tg_std = max(bpdet["step"] / 2.0, hyp_std) if np.isfinite(hyp_std) else bpdet["step"] / 2.0
-        tg_pred = tg_sim / 1.50                       # facteur universel
-        # FLAG DE JUSTESSE (orthogonal à la précision du fit) + confiance combinée.
+        tg_pred = tg_sim / 1.50                       # facteur cinétique universel (estimation en-run)
+        # CONFIANCE en-run (contraste/justesse du fit mono-fenêtre) — DISTINCTE de la confiance
+        # par angle de la méthode aveugle (tg_blind.confidence_angle). Flag de justesse orthogonal.
         acc = tg_kinetics.accuracy_flags(smiles, tg_sim, float(np.min(temps)), float(np.max(temps)), t_step)
         conf = tg_kinetics.confidence(quality["reliable"], acc["accuracy_risk"])
         # densité @300K RÉEL : extrapolation de la branche VITREUSE du fit (T réelle, pas rescalée).
@@ -681,7 +686,7 @@ def main():
              "Rg_nm": round(rg_nm, 2),                                 # rayon de giration (SOUS-ESTIMÉ : chaînes
              "Ree_nm": round(ree_nm, 2),                               # effondrées par le conformère compact)
              # C_inf RETIRÉ : non fiable (chaînes effondrées + taille finie 40-mère ; ×0.3 vs exp).
-             "Cp_JgK": round(cp_jgk, 2),                               # Cp corrigé (classique ÷2.27)
+             "Cp_JgK": round(cp_jgk, 2),                               # Cp corrigé (DOS quantique par défaut ; ÷2.27 en repli)
              "Cp_classical_JgK": round(cp_classical, 2),               # Cp classique brut (surestimé)
              **cp_dos_info,                                            # Cp_JgK_dos + facteur (si CP_DOS=1)
              "refractive_index": round(n_refr, 3) if n_refr else None, # indice de réfraction (gratuit)

@@ -8,10 +8,15 @@ Thanks for your interest! This is a small research tool, kept deliberately simpl
 src/tg_ml/
   cli.py          # `tgcli` — submit to the cluster, stream logs, parse results
   webapp.py       # `tgweb` — FastAPI front-end over the same backend
-  static/index.html   # single-file web UI (Ketcher editor + i18n FR/EN)
-  tg_kinetics.py  # ρ(T) hyperbola / breakpoint fit → Tg
+  static/index.html   # single-file web UI (Ketcher editor, served locally + i18n FR/EN)
+  tg_kinetics.py  # legacy single-window ρ(T) hyperbola / breakpoint fit (the default in-pipeline Tg)
+  tg_blind.py     # blind Tg: VK seed → pooled-window density coude + Prigogine–Defay + diffusion-angle confidence
   md_build.py     # build the oligomer + pack the simulation box
-scripts/pipeline.py   # the MD pipeline itself (runs on the cluster)
+scripts/
+  pipeline.py     # the MD pipeline itself (one cooling run; runs on the cluster)
+  blind_tg.py     # blind-Tg driver — orchestrates multiple windowed runs and pools them via tg_blind.py
+  vk_centerer.py  # van-Krevelen group-contribution Tg estimate, used to seed the window (predict via vk_centerer_model.json)
+  # compare_exp.py / exp_reference.py — reliability benchmark helpers (research, not the Tg tool)
 ```
 
 ## Dev setup

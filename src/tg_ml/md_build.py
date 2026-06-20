@@ -257,7 +257,7 @@ REFERENCE_POLYMERS = {
     "PMMA": {"smiles": "*CC(*)(C)C(=O)OC", "Tg_exp_C": 105},         # ~378 K
     "polycarbonate": {"smiles": "*OC(=O)Oc1ccc(cc1)C(C)(C)c1ccc(*)cc1", "Tg_exp_C": 145},  # BPA, ~418 K
     "polyethylene": {"smiles": "*CC*", "Tg_exp_C": -120},            # gardé (Tg ambiguë, hors set)
-    # --- 2e lot (14 polymères au total) : diversité chimique pour corréler le facteur ÷1.57 ---
+    # --- 2e lot (14 polymères au total) : diversité chimique pour corréler le facteur ÷1.50 ---
     "polyisoprene": {"smiles": "*CC(C)=CC*", "Tg_exp_C": -70},       # diène + méthyle, ~203 K
     "PEO": {"smiles": "*CCO*", "Tg_exp_C": -60},                     # éther flexible, ~213 K
     "PMA": {"smiles": "*CC(*)C(=O)OC", "Tg_exp_C": 10},              # acrylate (sans α-méthyle), ~283 K

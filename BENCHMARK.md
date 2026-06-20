@@ -4,6 +4,13 @@ Pipeline complet (Cp quantique-DOS + CTE dédié), BOX_A=70, propriétés standa
 Valeurs exp : van Krevelen / Bicerano / Polymer Handbook (`scripts/exp_reference.py`).
 Comparaison auto : `python scripts/compare_exp.py <nom>=<run.out> ...`.
 
+> **Portée.** Ce benchmark mesure les propriétés du **pipeline par défaut** (`scripts/pipeline.py`) —
+> Tg par fit hyperbole **mono-fenêtre**, densité, Cp, n… — sur 12 polymères, en erreur %. La **méthode
+> Tg aveugle** (coude densité + Prigogine-Defay + confiance par angle, driver `scripts/blind_tg.py`),
+> qui est le chiffre mis en avant dans le README, est validée séparément sur **100 polymères** (49
+> dérivés de sucres + 51 classiques) à **médiane ≈ 16 K** (≈13 K hors polymères H-liés). Le 7.2 % de Tg
+> ci-dessous est donc l'ancien chemin in-pipeline, pas le résultat aveugle.
+
 ## MAE % par propriété (12 polymères)
 
 | Propriété | MAE % | n | Biais | Verdict |

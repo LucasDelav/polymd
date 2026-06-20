@@ -29,7 +29,7 @@ confidence tier.
 |---|---|---|
 | **n** (refractive index) | Lorentz–Lorenz (Crippen molar refraction + density) | 🟢 **~2 %** |
 | **density @300 K** | glassy branch of the ρ(T) fit | 🟢 **~6 %** |
-| **Tg** | blind: density coude + Prigogine–Defay, confidence from the diffusion-coude angle → **÷ 1.50** | 🟢 **median ≈ 13–16 K** |
+| **Tg** | blind: density coude + Prigogine–Defay, confidence from the diffusion-coude angle → **÷ 1.50** | 🟢 **median ≈ 16 K** (≈13 K FF-tractable) |
 | **δ** (solubility parameter) | √(cohesive energy density) **× 1.25** | 🟢 **~10 %** |
 | **Cp** (heat capacity) | dU/dT on cooling **÷ 2.27** (classical→quantum) | 🟢 **~13 %** |
 | **K** (bulk modulus) | NPT volume fluctuations | 🔴 ~48 % (noisy) |
@@ -39,8 +39,12 @@ confidence tier.
 
 ### Blind Tg prediction
 
-No experimental Tg is used to place the temperature window — the pipeline finds the
-transition on its own (`src/tg_ml/tg_blind.py`, driven by `scripts/blind_tg.py`):
+The project's most accurate Tg path uses **no experimental Tg at all** — it finds the
+transition on its own. It runs as a separate **multi-window orchestrator**,
+`scripts/blind_tg.py` (the recipe lives in `src/tg_ml/tg_blind.py`), which submits several
+windowed cooling runs and pools them. (A plain `tgcli run`/`tgweb` submits a *single*
+cooling run and reports a quicker in-run Tg estimate from the one-window ρ(T) hyperbola fit;
+you give it a rough Tg with `-t`/`-r` to centre the window.) The blind driver:
 
 1. **Seed** the window with a van-Krevelen group-contribution estimate (`scripts/vk_centerer.py`).
 2. **Bracket** the transition with 3 cooling windows (centre ± 150 K) and pool all per-step points.
@@ -69,11 +73,12 @@ SMILES ──► validate (RDKit) ──► submit SLURM job over SSH ──► 
    results table ◄── parse properties ◄── stream logs live ◄──────┘
 ```
 
-The MD pipeline (`scripts/pipeline.py`) builds an oligomer (RDKit ETKDG + MMFF),
-applies the OpenFF Sage force field with NAGL charges, compresses & melts the box,
-cools it in steps recording **ρ(T), enthalpy U(T), cage mobility ⟨u²⟩(T) and diffusion
-D(T) per step**, and derives the properties. Tg uses the pooled multi-window *blind*
-construction above (`tg_blind.py`); the other properties come from the same cooling run.
+Each MD run (`scripts/pipeline.py`) builds an oligomer (RDKit ETKDG + MMFF), applies the
+OpenFF Sage force field with NAGL charges, compresses & melts the box, cools it in steps
+recording **ρ(T), enthalpy U(T), cage mobility ⟨u²⟩(T) and diffusion D(T) per step**, and
+derives all the properties plus a quick in-run Tg estimate. The blind Tg driver above
+(`blind_tg.py`) runs several such windows and pools their curves (`tg_blind.py`) for the
+authoritative Tg; the other properties come from a single cooling run.
 
 ## Install (front-end)
 
