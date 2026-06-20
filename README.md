@@ -20,14 +20,16 @@ backend:
 
 ## What it predicts
 
-Reliability is calibrated against experiment (Tg validated on ~72 polymers,
-MAE ≈ 13–15 K). Each value comes with a ±1σ confidence interval.
+Reliability is calibrated against experiment. **Tg is validated blind** on 100
+polymers (49 sugar-derived + 51 classic PS/PMMA/PET-family): **median error ≈ 16 K**,
+and ≈ 13 K on the polymers the force field handles well. Each value comes with a
+confidence tier.
 
 | Property | Method | Reliability (rel. MAE) |
 |---|---|---|
 | **n** (refractive index) | Lorentz–Lorenz (Crippen molar refraction + density) | 🟢 **~2 %** |
 | **density @300 K** | glassy branch of the ρ(T) fit | 🟢 **~6 %** |
-| **Tg** | ρ(T) knee → hyperbola/breakpoint fit → **÷ 1.50** | 🟢 **~6 %** (≈13–18 K) |
+| **Tg** | blind: density coude + Prigogine–Defay, confidence from the diffusion-coude angle → **÷ 1.50** | 🟢 **median ≈ 13–16 K** |
 | **δ** (solubility parameter) | √(cohesive energy density) **× 1.25** | 🟢 **~10 %** |
 | **Cp** (heat capacity) | dU/dT on cooling **÷ 2.27** (classical→quantum) | 🟢 **~13 %** |
 | **K** (bulk modulus) | NPT volume fluctuations | 🔴 ~48 % (noisy) |
@@ -35,12 +37,29 @@ MAE ≈ 13–15 K). Each value comes with a ±1σ confidence interval.
 | **Rg, Ree** (chain dimensions) | melt configuration | 🟡 lower bounds |
 | **G, E, ν** | shear deformations | ⚠️ experimental, not validated |
 
-### The ÷1.50 correction
+### Blind Tg prediction
 
-MD cools ~10¹¹ K/s vs ~0.1 K/s in the lab, so it over-predicts Tg by a roughly
-constant factor. `Tg_exp ≈ Tg_sim / 1.50` is a **universal kinetic correction**
-(tested on 14 diverse polymers; no chemical descriptor explains the residual),
-not a per-polymer fit. Cp (÷2.27) and δ (×1.25) are similarly physically motivated.
+No experimental Tg is used to place the temperature window — the pipeline finds the
+transition on its own (`src/tg_ml/tg_blind.py`, driven by `scripts/blind_tg.py`):
+
+1. **Seed** the window with a van-Krevelen group-contribution estimate (`scripts/vk_centerer.py`).
+2. **Bracket** the transition with 3 cooling windows (centre ± 150 K) and pool all per-step points.
+3. **Value** from the **density coude**: fit the glassy and rubbery asymptotes of ρ(T) and
+   intersect them — a window-independent *two-tangent* construction, robust to noise because it
+   averages over many points rather than hunting one onset. Then nudge toward the caloric (enthalpy)
+   Tg by a single universal **Prigogine–Defay** term, `ρ + 0.20·(U − ρ)`, which corrects part of the
+   per-polymer kinetic spread (the volume and enthalpy responses decouple with fragility).
+4. **Confidence** from the **diffusion-coude angle**: the more orthogonal the glassy (D ≈ 0) and melt
+   branches of D(T), the sharper the real transition and the more trustworthy the value.
+5. **Converge by adding coverage** (not seeds — the angle is seed-stable): if the angle is below 48°,
+   add two windows at ± 350 K and re-test; if it still doesn't sharpen, flag the result *to verify*.
+6. **Kinetic correction**: `Tg_exp ≈ Tg_sim / 1.50`.
+
+MD cools ~10¹¹ K/s vs ~0.1 K/s in the lab, so it over-predicts Tg by a roughly constant factor.
+`÷ 1.50` is a **universal kinetic correction** (tested on 14 diverse polymers; no chemical descriptor
+explains the residual), kept as-is rather than re-fit per family. The residual error is dominated by
+force-field under-cohesion of strong H-bonds (nylons, polyols), which systematically lowers their
+predicted Tg. Cp (÷2.27) and δ (×1.25) are similarly physically motivated.
 
 ## How it works
 
@@ -52,8 +71,9 @@ SMILES ──► validate (RDKit) ──► submit SLURM job over SSH ──► 
 
 The MD pipeline (`scripts/pipeline.py`) builds an oligomer (RDKit ETKDG + MMFF),
 applies the OpenFF Sage force field with NAGL charges, compresses & melts the box,
-cools it in steps, fits the density–temperature knee to get Tg, and derives the
-other properties.
+cools it in steps recording **ρ(T), enthalpy U(T), cage mobility ⟨u²⟩(T) and diffusion
+D(T) per step**, and derives the properties. Tg uses the pooled multi-window *blind*
+construction above (`tg_blind.py`); the other properties come from the same cooling run.
 
 ## Install (front-end)
 

@@ -138,6 +138,73 @@ def assess_fit(temps, Tg, det, t_step):
     return {"reliable": len(reasons) == 0, "reasons": reasons}
 
 
+# ── FLAG DE JUSTESSE (orthogonal à assess_fit qui ne mesure que la PRÉCISION du fit) ──────────
+# assess_fit attrape les fits INSTABLES (imprécis). Mais un fit précis peut être SYSTÉMATIQUEMENT
+# faux : le FF à charges fixes sous-rend les liaisons H fortes/directionnelles (amide, imide,
+# uréthane, urée, acide, –OH multiples) → la vraie Tg monte mais la simu non, et le ÷1.50 (calé
+# hors-H-bonding fort) ne le rattrape pas → Tg prédite SOUS-estimée. Réf. : Nylon-6 ΔTg −86 K.
+# Ces motifs n'existent souvent qu'INTER-unités (l'amide du nylon) → on les cherche sur le DIMÈRE.
+# SMARTS agnostiques à l'aromaticité ([#7]/[#6] et non [NX3]/[CX3]) : sinon un imide AROMATIQUE
+# (ex. uracile, entrée 14) passe à travers — le carbonyle est porté par un carbone aromatique.
+_RISK_SMARTS = [("amide/imide", "[#7X3][#6X3]=[OX1]"), ("uréthane", "[#7X3][#6X3](=[OX1])[#8X2]"),
+                ("urée", "[#7X3][#6X3](=[OX1])[#7X3]"), ("acide carboxylique", "[#6X3](=[OX1])[OX2H1]")]
+
+
+def hbond_risk_motifs(psmiles):
+    """Motifs à liaisons H fortes (→ Tg probablement sous-estimée), cherchés sur le dimère
+    tête-à-queue. [] si aucun ou si RDKit absent."""
+    try:
+        from rdkit import Chem
+        from rdkit import RDLogger; RDLogger.DisableLog("rdApp.*")
+    except ImportError:
+        return []
+    unit = Chem.MolFromSmiles(psmiles)
+    if unit is None:
+        return []
+    mol = unit
+    d = [a.GetIdx() for a in unit.GetAtoms() if a.GetAtomicNum() == 0]
+    if len(d) == 2:                                   # dimère tête-à-queue (motifs inter-unités)
+        nat = unit.GetNumAtoms()
+        nbr = lambda x: unit.GetAtomWithIdx(x).GetNeighbors()[0].GetIdx()
+        rw = Chem.RWMol(Chem.CombineMols(unit, unit))
+        rw.AddBond(nbr(d[1]), nbr(d[0]) + nat, Chem.BondType.SINGLE)
+        for i in sorted([d[1], d[0] + nat], reverse=True):
+            rw.RemoveAtom(i)
+        try:
+            cand = rw.GetMol(); Chem.SanitizeMol(cand); mol = cand
+        except Exception:
+            mol = unit
+    n_oh = len(mol.GetSubstructMatches(Chem.MolFromSmarts("[OX2H]")))
+    found = [name for name, sma in _RISK_SMARTS if mol.HasSubstructMatch(Chem.MolFromSmarts(sma))]
+    if n_oh >= 2:
+        found.append("polyols (–OH multiples)")
+    return found
+
+
+def accuracy_flags(psmiles, tg_sim, t_lo, t_hi, t_step):
+    """Risque de JUSTESSE (biais systématique), indépendant de la précision du fit.
+    Renvoie {accuracy_risk: faible|modéré|élevé, accuracy_reasons: [...], risk_motifs: [...]}."""
+    reasons, motifs = [], hbond_risk_motifs(psmiles)
+    if motifs:
+        reasons.append(f"liaisons H fortes ({', '.join(motifs)}) sous-rendues par le FF à charges "
+                       f"fixes + ÷1.50 → Tg probablement SOUS-estimée")
+    edge = max(2 * t_step, 0.10 * (t_hi - t_lo))
+    if (tg_sim - t_lo) < edge or (t_hi - tg_sim) < edge:
+        reasons.append("Tg_sim proche d'un bord de fenêtre → risque d'extrapolation / latch du fit")
+    level = "élevé" if len(reasons) >= 2 else ("modéré" if reasons else "faible")
+    return {"accuracy_risk": level, "accuracy_reasons": reasons, "risk_motifs": motifs}
+
+
+def confidence(fit_reliable, accuracy_risk):
+    """Combine PRÉCISION (fit_reliable) et JUSTESSE (accuracy_risk) en un niveau unique.
+    haute = fit stable ET aucun risque de biais ; basse = les deux en défaut ; moyenne sinon."""
+    if fit_reliable and accuracy_risk == "faible":
+        return "haute"
+    if (not fit_reliable) and accuracy_risk == "élevé":
+        return "basse"
+    return "moyenne"
+
+
 def recommend_window(temps, rho, Tg, t_step, contrast_min=1.3, cte_melt=4.0e-4):
     """Si le fit est douteux, recommande quoi faire — à partir de la STRUCTURE DE PENTE de ρ(T),
     PAS de la position où le Tg ajusté a latché (cette position est bidon quand le fit est instable :

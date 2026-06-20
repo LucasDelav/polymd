@@ -40,3 +40,17 @@ id_rsa*
 .vscode/
 *.swp
 tg_prior_model.joblib
+
+# ---- Research run artifacts (cluster job tracking, per-run results, plots) ----
+*_jobs.json
+*_results.json
+*_recenter.json
+*_preds.json
+*_final*.json
+*_table.json
+blind15_*.json
+plots/
+
+# ---- Lab datasets / sources (not part of the tool) ----
+*.docx
+oxygenated_polymers.json

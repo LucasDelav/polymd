@@ -667,6 +667,7 @@ def run(
     mech: Optional[bool] = typer.Option(None, "--mech/--no-mech", help="Calculer K (défaut : oui)."),
     shear: bool = typer.Option(False, "--shear", help="Activer G/E/ν (EXPÉRIMENTAL, non validé)."),
     cool_indep: bool = typer.Option(False, "--cool-indep", help="Paliers indépendants depuis le snapshot de fonte."),
+    msd: bool = typer.Option(False, "--msd", help="Tg DYNAMIQUE : mesure la MSD all-atom par palier (MSD_TG=1)."),
 ):
     """Soumettre un calcul MD sur CRIANN, suivre en direct, afficher les propriétés.
 
@@ -762,6 +763,8 @@ def run(
 
         env = _collect_env(smiles, box_a, n_units, t_step, equil_ps, sample_ps,
                            mech=mech, tensile=shear, cool_indep=cool_indep)  # --shear pilote E/ν (MECH_TENSILE)
+        if msd:
+            env["MSD_TG"] = 1
         env.update(window_env)
         if seeds > 1:
             jobs = []
@@ -843,6 +846,15 @@ def _finish(name: str, jobid: str, smiles: str, env: dict, log: str) -> None:
     console.print()
     if props:
         render_props(props, jobid)
+        # Confiance combinée (précision du fit × justesse chimique).
+        conf = props.get("confidence")
+        if conf:
+            col = {"haute": "green", "moyenne": "yellow", "basse": "red"}.get(conf, "dim")
+            badge = {"haute": "✅", "moyenne": "🟡", "basse": "🔴"}.get(conf, "•")
+            console.print(f"[{col}]{badge} Confiance Tg : {conf.upper()}[/{col}]  "
+                          f"[dim](précision fit : {'OK' if props.get('fit_reliable') else 'douteuse'} ; "
+                          f"risque de biais : {props.get('accuracy_risk','?')})[/dim]")
+        # Panneau PRÉCISION (fit instable).
         if props.get("fit_reliable") is False:
             warns = props.get("fit_warnings") or ["raison non précisée"]
             body = "\n".join(f"• {w}" for w in warns)
@@ -851,8 +863,14 @@ def _finish(name: str, jobid: str, smiles: str, env: dict, log: str) -> None:
                 arrow = {"plus haut": "↑", "plus bas": "↓", "plus large": "↔"}.get(
                     props.get("fit_direction") or "", "→")
                 body += f"\n\n[bold]{arrow} Recommandation :[/bold] {rec}"
-            console.print(Panel(body, title="⚠ Fit Tg peu fiable — résultat à valider",
+            console.print(Panel(body, title="⚠ Précision : fit Tg instable — résultat à valider",
                                 border_style="yellow"))
+        # Panneau JUSTESSE (biais systématique probable — orthogonal à la précision).
+        acc_reasons = props.get("accuracy_reasons") or []
+        if acc_reasons:
+            body = "\n".join(f"• {r}" for r in acc_reasons)
+            console.print(Panel(body, title="⚠ Justesse : biais systématique possible (FF + ÷1.50)",
+                                border_style="magenta"))
     else:
         console.print("[yellow]⚠ Aucun bloc PROPRIÉTÉS trouvé (job échoué/interrompu ?). "
                       "Log brut sauvegardé.[/yellow]")

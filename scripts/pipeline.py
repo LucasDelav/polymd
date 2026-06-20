@@ -385,7 +385,22 @@ def cp_dos_factor(omm_top, omm_system, plat, pos_nm, box_diag_nm, orig_mass, tar
 def main():
     smiles = os.environ.get("SMILES", "*CC(*)c1ccccc1")
     tg_exp = float(os.environ.get("TG_EXP", "373"))
-    n_units = int(os.environ.get("N_UNITS", "40"))
+    # n_units ADAPTATIF (défaut) : le coût d'embedding 3D ETKDG est SUPER-LINÉAIRE en taille de
+    # chaîne et HANGE en C++ sur les gros motifs / cycles fusionnés (acétals bicycliques) — un
+    # N_UNITS=40 fixe donne 1500-11000 atomes/chaîne pour les motifs oxygénés (30-280 at./unité)
+    # → embed des heures/infini, et le BUILD_TIMEOUT SIGALRM ne peut pas tuer un appel C++ figé.
+    # On vise une TAILLE DE CHAÎNE ~constante (≈ celle des basiques à n=40, qui ont calé le ÷1.50) :
+    # petits motifs → n≈40, gros motifs ADMET → n≈4-5. Forcer --n-units (env N_UNITS) court-circuite.
+    if os.environ.get("N_UNITS"):
+        n_units = int(os.environ["N_UNITS"])
+    else:
+        from rdkit import Chem as _C
+        _u = _C.MolFromSmiles(smiles)
+        _hpr = sum(1 for a in _u.GetAtoms() if a.GetAtomicNum() > 1) if _u else 8
+        _target = int(os.environ.get("TARGET_CHAIN_ATOMS", "280"))
+        n_units = max(3, min(40, round(_target / max(1, _hpr))))
+        print(f"  n_units adaptatif = {n_units} (motif {_hpr} at. lourds → chaîne ≈ {n_units*_hpr} at., "
+              f"cible {_target})", flush=True)
     box_target = float(os.environ.get("BOX_A", "80"))
     do_mech = os.environ.get("MECH", "1") == "1"
     seed = int(os.environ.get("SEED", "1"))   # graine aléatoire (packing + vitesses + intégrateur)
@@ -517,6 +532,14 @@ def main():
     eff_rate = t_step / ((equil_ps + sample_ps) * 1e-12)
     R = np.full(len(temps), np.nan)
     U = np.full(len(temps), np.nan)   # énergie totale ⟨U⟩ par palier (pour Cp = dU/dT)
+    # Tg DYNAMIQUE (MSD_TG=1) : la densité a un coude TROP MOU pour les hautes Tg (signature 2nd
+    # ordre). La MOBILITÉ chute de plusieurs ordres de grandeur à Tg → signature nette. On mesure la
+    # MSD all-atom sur la fenêtre d'échantillonnage de CHAQUE palier ; sa chute = Tg dynamique.
+    msd_tg = os.environ.get("MSD_TG", "0") == "1"
+    # pas d'échantillonnage MSD (ps) — fin (5 ps) pour résoudre la montée de la MSD ; sur la fenêtre
+    # sample_ps on obtient la courbe MSD(t) → τ(T)=temps pour atteindre un seuil de sortie de cage.
+    msd_dt = float(os.environ.get("MSD_DT", "5"))
+    MSD_TRAJ = [None] * len(temps)    # par palier : liste de [lag_ps, MSD_nm²]
     for k, Tk in enumerate(temps):
         with P.block("08_cool_palier"):
             if indep:
@@ -524,13 +547,44 @@ def main():
                 sim.context.setVelocitiesToTemperature(t_high * unit.kelvin, k * 13 + seed)
             ig.setTemperature(float(Tk) * unit.kelvin); sim.context.setParameter(baro.Temperature(), float(Tk))
             sim.step(int(equil_ps * spp))
+            if msd_tg:                              # référence APRÈS équilibration (positions continues)
+                s0 = sim.context.getState(getPositions=True)
+                p_prev = s0.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
+                p_ref = p_prev.copy(); unwr = p_prev.copy(); cur = []; lag = 0.0
             rs, es = [], []
-            for _ in range(int(sample_ps / 10)):
-                sim.step(10 * spp); rs.append(rho(sim))
-                st = sim.context.getState(getEnergy=True)
+            nchunk = int(sample_ps / (msd_dt if msd_tg else 10))
+            for _ in range(nchunk):
+                sim.step(int((msd_dt if msd_tg else 10) * spp)); rs.append(rho(sim))
+                st = sim.context.getState(getEnergy=True, getPositions=msd_tg)
                 es.append((st.getPotentialEnergy() + st.getKineticEnergy()).value_in_unit(unit.kilojoule_per_mole))
+                if msd_tg:                          # unwrap incrémental (déplacement < boîte/2 sur msd_dt)
+                    p = st.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
+                    bx = np.diag(st.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer))
+                    d = p - p_prev; d -= bx * np.round(d / bx); unwr = unwr + d; p_prev = p
+                    lag += msd_dt; cur.append([lag, float(((unwr - p_ref) ** 2).sum(1).mean())])
             R[k] = float(np.mean(rs)); U[k] = float(np.mean(es))
-        print(f"   palier {k+1}/{len(temps)} T={Tk:.0f}K ρ={R[k]:.3f}", flush=True)
+            if msd_tg: MSD_TRAJ[k] = cur
+        extra = f" MSD(fin)={cur[-1][1]:.3f}nm²" if msd_tg else ""
+        print(f"   palier {k+1}/{len(temps)} T={Tk:.0f}K ρ={R[k]:.3f}{extra}", flush=True)
+    msd_t = [{"T": float(t), "curve": c} for t, c in zip(temps, MSD_TRAJ)] if msd_tg else None
+    # U(T) par palier : observable thermodynamique (le saut de Cp = dU/dT à Tg est parfois plus net
+    # que le coude densité). Toujours sorti (petit) → permet de tester Cp comme observable Tg + flag.
+    u_t = [[float(t), float(u)] for t, u in zip(temps, U)]
+    # ρ(T) par palier : le coude dilatométrique (observable Tg standard, le plus net pour les
+    # polymères flexibles/bas-Tg). Toujours sorti (petit) → permet de tester le coude densité.
+    rho_t = [[float(t), float(r)] for t, r in zip(temps, R)]
+    # D(T) par palier (si MSD_TG) : coeff de diffusion = pente de la MSD sur la 2e moitié des lags
+    # / 6 (Einstein 3D). Chute de plusieurs ordres de grandeur à Tg → signature dynamique nette.
+    d_t = None
+    if msd_tg:
+        d_t = []
+        for t, c in zip(temps, MSD_TRAJ):
+            if c and len(c) >= 4:
+                arr = np.array(c, float); h = len(arr) // 2
+                slope = float(np.polyfit(arr[h:, 0], arr[h:, 1], 1)[0])  # nm²/ps
+                d_t.append([float(t), max(slope, 0.0) / 6.0])
+            else:
+                d_t.append([float(t), None])
     # Cp CLASSIQUE = dU/dT (pente de U(T)), ramené par gramme. ⚠ la MD classique SURESTIME Cp
     # (équipartition : modes quantiques haute-fréquence non gelés) — pas de correction quantique ici.
     cp_slope = float(np.polyfit(temps, U, 1)[0])                 # kJ/mol(box)/K
@@ -569,8 +623,17 @@ def main():
             tg_sim, tg_method, tg_std = tg_hyp, "hyperbole", det.get("tg_std", float("nan"))
         else:
             tg_sim, bpdet = tg_kinetics.fit_tg_breakpoint(temps, R)
-            tg_method, tg_std = "coude-2seg", bpdet["step"] / 2.0
+            tg_method = "coude-2seg"
+            # CI HONNÊTE : le repli coude-2seg ne "voit" que la résolution de grille (step/2) et
+            # SOUS-ESTIME l'incertitude d'un fit jugé instable (d'où l'ancien ±10 K trompeur). On
+            # reporte la plus grande entre cette résolution et l'incertitude (covariance) de
+            # l'hyperbole qui a justement déclenché le repli.
+            hyp_std = det.get("tg_std", float("nan"))
+            tg_std = max(bpdet["step"] / 2.0, hyp_std) if np.isfinite(hyp_std) else bpdet["step"] / 2.0
         tg_pred = tg_sim / 1.50                       # facteur universel
+        # FLAG DE JUSTESSE (orthogonal à la précision du fit) + confiance combinée.
+        acc = tg_kinetics.accuracy_flags(smiles, tg_sim, float(np.min(temps)), float(np.max(temps)), t_step)
+        conf = tg_kinetics.confidence(quality["reliable"], acc["accuracy_risk"])
         # densité @300K RÉEL : extrapolation de la branche VITREUSE du fit (T réelle, pas rescalée).
         T_ROOM = 300.0
         dens300_md, dens300_std = tg_kinetics.rho_at_T(T_ROOM, popt, pcov)   # densité MD brute (FF)
@@ -626,7 +689,14 @@ def main():
              "CTE_melt_ppmK_experimental": cte_melt,      #   (r≈−0.46 vs exp) ; exposée pour parité largeur
              "fit_reliable": quality["reliable"], "fit_warnings": quality["reasons"],
              "fit_direction": rec["direction"] if rec else None,
-             "fit_recommendation": rec["message"] if rec else None}
+             "fit_recommendation": rec["message"] if rec else None,
+             # JUSTESSE (biais systématique) — orthogonal à fit_reliable (précision) :
+             "accuracy_risk": acc["accuracy_risk"], "accuracy_reasons": acc["accuracy_reasons"],
+             "risk_motifs": acc["risk_motifs"], "confidence": conf,
+             "U_T": u_t,                                  # enthalpie par palier → saut de Cp à Tg
+             "RHO_T": rho_t,                              # densité par palier → coude dilatométrique
+             **({"MSD_T": msd_t} if msd_t else {}),      # Tg dynamique (MSD_TG=1) : mobilité par palier
+             **({"D_T": d_t} if d_t else {})}            # diffusion par palier (Einstein) : chute à Tg
 
     # ─────────────── MÉCANIQUE (sur le verre à MECH_T, défaut 300 K) ───────────────
     # On évalue K/E/ν à 300 K (T ambiante = standard des modules reportés), BIEN sous Tg : à t_low
