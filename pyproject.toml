@@ -8,7 +8,8 @@ license = { text = "MIT" }
 keywords = ["polymer", "glass-transition", "molecular-dynamics", "cheminformatics", "rdkit"]
 dependencies = [
     # Front-end local (CLI `polycli` + web app `polyweb`). Le calcul MD lui-même tourne sur le cluster.
-    "rdkit>=2024.3",       # validation/normalisation du PSMILES, conversion KET
+    "rdkit>=2024.3",       # validation/normalisation du PSMILES, conversion KET, seed van-Krevelen
+    "numpy>=1.26",         # poolage des fenêtres + recette Tg aveugle (tg_blind) côté front-end
     "typer>=0.12.0",       # CLI
     "rich>=13.7.0",        # affichage CLI
     "fastapi>=0.110.0",    # webapp
@@ -26,6 +27,7 @@ polyweb = "polymd.webapp:main"
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/polymd/static/index.html" = "polymd/static/index.html"
+"src/polymd/vk_centerer_model.json" = "polymd/vk_centerer_model.json"
 
 [build-system]
 requires = ["hatchling"]

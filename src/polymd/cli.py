@@ -636,106 +636,145 @@ def _finish_seeds(name: str, smiles: str, jobs: list) -> None:
 
 
 # ───────────────────────── Commandes ─────────────────────────
+# ───────────────────────── Tg aveugle : orchestration multi-fenêtres ─────────────────────────
+# Recette validée (cf. mémoire reference-tg-prediction-method / project-overflag-floor-explained) :
+# graine van-Krevelen → 3 fenêtres pivots (centre ∓150 K, demi-largeur 140 K, MSD ON) → poolage de
+# toutes les courbes → recette densité+Prigogine-Defay pour la VALEUR, angle du coude de diffusion
+# pour la CONFIANCE. Si l'angle < 48° (coude mou), on AJOUTE 2 fenêtres (∓300 K, soit +150 K de plus
+# que l'étape 1) pour élargir le pool — c'est l'extension de fenêtres, PAS des graines, qui rattrape
+# un mauvais centrage.
+BLIND_WIN = 140.0                       # demi-largeur de chaque fenêtre (K)
+BLIND_STAGE1 = (-150.0, 0.0, 150.0)     # offsets des 3 fenêtres pivots autour du centre
+BLIND_STAGE2 = (-300.0, 300.0)          # fenêtres ajoutées si l'angle reste mou (∓150 K de plus)
+BLIND_ANGLE_THRESH = 48.0               # = tg_blind.ANGLE_HAUTE (seuil « haute » confiance)
+
+
+def _vk_model_path() -> Path:
+    """Localise vk_centerer_model.json (bundlé dans le package, sinon à la racine du dépôt)."""
+    here = Path(__file__).resolve()
+    for cand in [here.parent / "vk_centerer_model.json",
+                 *[p / "vk_centerer_model.json" for p in here.parents]]:
+        if cand.exists():
+            return cand
+    raise FileNotFoundError("vk_centerer_model.json introuvable")
+
+
+def vk_seed_K(smiles: str) -> Optional[float]:
+    """Tg EXPÉRIMENTALE estimée (K) par contribution de groupes van-Krevelen — la graine aveugle.
+    Sert à centrer les fenêtres de simulation sans aucune donnée expérimentale. None si échec."""
+    try:
+        import numpy as np
+        from polymd.vk_centerer import features as vk_features
+        model = json.loads(_vk_model_path().read_text())
+        x, _ = vk_features(smiles)
+        if x is None:
+            return None
+        mu, sd, wz = np.array(model["mu"]), np.array(model["sd"]), np.array(model["wz"])
+        z = np.append((np.array(x) - mu) / sd, 1.0)
+        return float(z @ wz)
+    except Exception:
+        return None
+
+
+def _blind_window_env(base: dict, center_sim: float, offset: float, full_props: bool) -> dict:
+    """Env d'UNE fenêtre : centrée sur center_sim+offset (espace SIMULÉ), demi-largeur 140 K, MSD ON.
+    full_props=False → fenêtre satellite : on coupe les propriétés coûteuses, on ne garde que les
+    courbes Tg (densité/diffusion). full_props=True → fenêtre centrale qui porte aussi les propriétés."""
+    env = dict(base)
+    env["TG_EXP"] = round(center_sim / 1.5)                 # libellé/repli interne du pipeline
+    env["TG_SIM_PRIOR"] = round(center_sim + offset)
+    env["WIN_HI"] = BLIND_WIN
+    env["WIN_LO"] = BLIND_WIN
+    env["MSD_TG"] = 1                                        # courbes diffusion/⟨u²⟩ indispensables
+    env["TG_DESC"] = f"aveugle centre={round(center_sim + offset)}K"
+    if not full_props:
+        env["MECH"] = 0
+        env["CP_DOS"] = 0
+        env.pop("MECH_TENSILE", None)
+    return env
+
+
+def _pool_windows(out_rels: list) -> dict:
+    """Récupère les .out distants et agrège toutes les courbes (u2, U, rho, D) → dict prêt pour la recette."""
+    import numpy as np
+    from polymd.tg_blind import parse_curves
+    merged: dict = {}
+    for orel in out_rels:
+        txt = _ssh(f"cat {REMOTE_ROOT}/{orel} 2>/dev/null", check=False)
+        pc = parse_curves(txt)
+        for k, (T, Y) in pc.get("curves", {}).items():
+            merged.setdefault(k, ([], []))
+            merged[k][0].extend(T)
+            merged[k][1].extend(Y)
+    return {k: (np.array(v[0]), np.array(v[1])) for k, v in merged.items() if v[0]}
+
+
 @app.command()
 def run(
     smiles: str = typer.Option(..., "--smiles", "-s", prompt="PSMILES du monomère (2 `*`)",
                                help="PSMILES, ex. polystyrène : *CC(*)c1ccccc1"),
-    tg_exp: Optional[float] = typer.Option(None, "--tg-exp", "-t",
-                                 help="Tg connue/estimée (K) → fenêtre étroite auto-centrée sur 1.5× (le + rapide)."),
-    tg_range: Optional[str] = typer.Option(None, "--tg-range", "-r",
-                                 help="Plage de Tg EXPÉRIMENTALE estimée 'LO-HI' (K), ex. 350-420. Alternative à --tg-exp."),
-    margin: float = typer.Option(DEFAULT_MARGIN, "--margin",
-                                 help="Marge K de part et d'autre de 1.5×plage (mode plage). Plus petit = plus rapide, "
-                                      "fit plus risqué (un avertissement signalera un fit douteux)."),
+    tg_hint: Optional[float] = typer.Option(None, "--tg-hint", "-t",
+                                 help="OPTIONNEL : si tu connais déjà une Tg (K), elle remplace la graine "
+                                      "van-Krevelen pour centrer les fenêtres. Sinon tout est automatique."),
     name: Optional[str] = typer.Option(None, "--name", "-n", help="Étiquette du run (défaut : dérivée du SMILES)."),
     partition: str = typer.Option("gpu", "--partition", help="Partition GPU : gpu | gpu_debug | gpu_h200."),
-    time_limit: str = typer.Option("02:00:00", "--time", help="Limite de temps SLURM (HH:MM:SS)."),
-    seeds: int = typer.Option(1, "--seeds", min=1, help="Nb de graines aléatoires (jobs indépendants). "
-                              ">1 → moyenne ± erreur-type (σ/√N) : réduit l'incertitude affichée."),
+    time_limit: str = typer.Option("02:00:00", "--time", help="Limite de temps SLURM par fenêtre (HH:MM:SS)."),
+    seeds: int = typer.Option(1, "--seeds", min=1, help="Graines aléatoires par fenêtre (jobs indépendants). "
+                              ">1 → plus de configurations poolées (coude plus net) + propriétés moyennées ± σ/√N."),
     sync: bool = typer.Option(True, "--sync/--no-sync", help="Pousser pipeline.py + src/polymd avant soumission."),
-    detach: bool = typer.Option(False, "--detach", help="Soumettre puis rendre la main (pas de streaming)."),
+    detach: bool = typer.Option(False, "--detach", help="Soumettre les fenêtres puis rendre la main (pas de recette)."),
     force: bool = typer.Option(False, "--force", help="Ignorer l'échec de validation du SMILES."),
+    no_converge: bool = typer.Option(False, "--no-converge",
+                                 help="Ne pas ajouter de fenêtres même si le coude reste mou (1 seule passe)."),
     # paramètres avancés (None = défaut du pipeline)
     box_a: Optional[float] = typer.Option(None, help="Arête de boîte Å (défaut 80 = ~48k atomes ; NE PAS réduire)."),
     n_units: Optional[int] = typer.Option(None, help="Degré de polymérisation (défaut 40)."),
     t_step: Optional[float] = typer.Option(None, help="Pas de température K (défaut 20)."),
     equil_ps: Optional[float] = typer.Option(None, help="Équilibration par palier ps (défaut 100)."),
     sample_ps: Optional[float] = typer.Option(None, help="Échantillonnage par palier ps (défaut 50)."),
-    win_hi: Optional[float] = typer.Option(None, help="Fenêtre au-dessus du prior K (défaut 80)."),
-    win_lo: Optional[float] = typer.Option(None, help="Fenêtre en-dessous du prior K (défaut 140)."),
-    tg_prior: Optional[float] = typer.Option(None, help="Centre de fenêtre K (défaut 1.5×Tg_exp)."),
     mech: Optional[bool] = typer.Option(None, "--mech/--no-mech", help="Calculer K (défaut : oui)."),
     shear: bool = typer.Option(False, "--shear", help="Activer G/E/ν (EXPÉRIMENTAL, non validé)."),
     cool_indep: bool = typer.Option(False, "--cool-indep", help="Paliers indépendants depuis le snapshot de fonte."),
-    msd: bool = typer.Option(False, "--msd", help="Tg DYNAMIQUE : mesure la MSD all-atom par palier (MSD_TG=1)."),
 ):
-    """Soumettre un calcul MD sur CRIANN, suivre en direct, afficher les propriétés.
+    """Prédire la Tg (et densité, CTE, K…) d'un polymère SANS aucune donnée expérimentale.
 
-    Température : --tg-exp T (estimation ponctuelle → fenêtre étroite, le + rapide) OU
-    --tg-range LO-HI (plage de Tg expérimentale → fenêtre élargie). Les deux sont optionnels :
-    sans rien, mode interactif (ou scan large 250-500 K en non-interactif).
+    Méthode aveugle : la fenêtre de simulation est auto-centrée par contribution de groupes
+    (van-Krevelen), puis 3 fenêtres se chevauchant donnent la Tg par coude de densité
+    (+ Prigogine-Defay), avec une confiance jugée sur l'angle du coude de diffusion. Si le coude
+    est mou, 2 fenêtres élargies sont ajoutées automatiquement. ~3 jobs GPU (5 si extension).
+
+    Donne --tg-hint seulement si tu connais déjà une Tg approchée (ça remplace la graine auto).
     """
+    import numpy as np
+    from polymd.tg_blind import blind_tg_recipe, confidence_angle, converged, CAL
     name = name or _slug(smiles)
 
-    if tg_exp is not None and tg_range is not None:
-        console.print("[red]✗ Donne soit --tg-exp soit --tg-range, pas les deux.[/red]")
-        raise typer.Exit(1)
-
-    # Aucune température fournie → demander (interactif) ou scan large (non-interactif).
-    if tg_exp is None and tg_range is None:
-        if sys.stdin.isatty():
-            ans = typer.prompt("Tg estimée en K, ou plage 'LO-HI' (Entrée = scan large 250-500)",
-                               default="", show_default=False).strip()
-            nums = re.findall(r"\d+\.?\d*", ans)
-            if len(nums) >= 2:
-                tg_range = ans
-            elif len(nums) == 1:
-                tg_exp = float(nums[0])
-            else:
-                tg_range = DEFAULT_RANGE
-        else:
-            tg_range = DEFAULT_RANGE
-            console.print(f"[yellow]Aucune Tg fournie → scan large {DEFAULT_RANGE} K (lent).[/yellow]")
-
-    try:
-        window_env, mode, exp_desc = resolve_temperature(tg_exp, tg_range, margin)
-    except ValueError as e:
-        console.print(f"[red]✗ Plage invalide :[/red] {e}")
-        raise typer.Exit(1)
-
-    # Surcharges manuelles (espace SIMULÉ) — hors mode plage qui les calcule lui-même.
-    manual = {k: v for k, v in
-              {"TG_SIM_PRIOR": tg_prior, "WIN_HI": win_hi, "WIN_LO": win_lo}.items() if v is not None}
-    if manual and mode == "plage":
-        console.print("[yellow]⚠ --tg-prior/--win-hi/--win-lo ignorés en mode plage.[/yellow]")
-    elif manual:
-        window_env.update(manual)
-
-    # Libellé lisible pour le header du job distant (évite un "Tg_exp=<midpoint>" trompeur en mode plage).
-    window_env["TG_DESC"] = exp_desc
-
-    step = t_step if t_step is not None else 20.0
-    t_high, t_low, n_paliers = effective_window(window_env, step)
-
-    console.print(Panel.fit(
-        f"[bold]SMILES[/bold]  {smiles}\n"
-        f"[bold]Température[/bold]  {exp_desc}\n"
-        f"[bold]Sweep simulé[/bold]  {t_low:.0f} → {t_high:.0f} K  "
-        f"({n_paliers} paliers, pas {step:g} K)\n"
-        f"[bold]run[/bold]  {name}   [bold]partition[/bold] {partition}",
-        title="polycli — pipeline MD → propriétés", border_style="cyan"))
-    if n_paliers >= 22:
-        console.print(f"[yellow]⚠ {n_paliers} paliers = run long. Resserre la plage "
-                      f"ou augmente --t-step pour accélérer.[/yellow]")
-
-    ok, msg = validate_psmiles(smiles)
+    ok, vmsg = validate_psmiles(smiles)
     if ok:
-        console.print(f"[green]✓[/green] SMILES : {msg}")
+        console.print(f"[green]✓[/green] SMILES : {vmsg}")
     else:
-        console.print(f"[red]✗ SMILES invalide :[/red] {msg}")
+        console.print(f"[red]✗ SMILES invalide :[/red] {vmsg}")
         if not force:
             raise typer.Exit(1)
         console.print("[yellow]--force : on continue malgré tout.[/yellow]")
+
+    # Graine : Tg expérimentale estimée → centre SIMULÉ = 1.5×graine (correction cinétique inverse).
+    if tg_hint is not None:
+        seed_K, seed_src = float(tg_hint), "fournie (--tg-hint)"
+    else:
+        seed_K = vk_seed_K(smiles)
+        seed_src = "van-Krevelen (auto)"
+        if seed_K is None:
+            seed_K, seed_src = 373.0, "défaut 373 K (graine VK indisponible)"
+            console.print("[yellow]⚠ Graine van-Krevelen indisponible → centre par défaut 373 K.[/yellow]")
+    center_sim = 1.5 * seed_K
+
+    console.print(Panel.fit(
+        f"[bold]SMILES[/bold]  {smiles}\n"
+        f"[bold]Graine Tg[/bold]  {seed_K:.0f} K  ({seed_src})\n"
+        f"[bold]Fenêtres[/bold]  centre simulé {center_sim:.0f} K  ∓150 K ×{seeds} graine(s), demi-largeur {BLIND_WIN:.0f} K\n"
+        f"[bold]run[/bold]  {name}   [bold]partition[/bold] {partition}",
+        title="polycli — Tg aveugle (sans donnée expérimentale)", border_style="cyan"))
 
     risk = chemistry_risk(smiles)
     if risk:
@@ -747,56 +786,121 @@ def run(
             title="⚠ Risque de sous-estimation de Tg", border_style="yellow"))
 
     if partition == "gpu_debug":
-        console.print("[yellow]⚠ gpu_debug = 30 min max ; le pipeline peut dépasser (~15-28 min). "
-                      "Utilise 'gpu' si risque de dépassement.[/yellow]")
+        console.print("[yellow]⚠ gpu_debug = 30 min max ; chaque fenêtre peut dépasser (~15-28 min). "
+                      "Utilise 'gpu'.[/yellow]")
 
-    jobs: list = []
-    jobid = out_rel = None
+    base = _collect_env(smiles, box_a, n_units, t_step, equil_ps, sample_ps,
+                        mech=mech, tensile=shear, cool_indep=cool_indep)  # --shear pilote E/ν (MECH_TENSILE)
+
+    def _submit_stage(offsets, label):
+        """Soumet (offsets × seeds) fenêtres. La fenêtre centrale (offset 0, graine 1) porte les
+        propriétés ; les autres sont allégées. Renvoie (jobids, out_rels, center_jobs[(seed,out)])."""
+        jids, orels, center_jobs = [], [], []
+        for s in range(1, seeds + 1):
+            for off in offsets:
+                full = (off == 0.0)
+                env = _blind_window_env(base, center_sim, off, full_props=full)
+                if seeds > 1:
+                    env["SEED"] = s
+                tag = f"{name}_{label}_s{s}_{off:+.0f}".replace("+", "p").replace("-", "m")
+                jid, orel = submit(env, tag, time_limit, partition)
+                jids.append(jid); orels.append(orel)
+                if full:
+                    center_jobs.append((s, orel))
+        return jids, orels, center_jobs
+
+    all_orels: list = []
+    center_jobs: list = []
     try:
-        # sync AVANT le preflight : pousse le code (dont src/polymd/pipeline.py) puis vérifie
-        # sa présence. Sans ça, un cluster vierge échouerait au preflight avant d'avoir pu rsync.
+        # sync AVANT le preflight : pousse le code (dont pipeline.py) puis vérifie sa présence.
         if sync:
             with console.status("[cyan]Synchronisation du code (rsync)…", spinner="dots"):
-                _rsync("src/polymd/", "src/polymd/")   # contient pipeline.py (lancé sur le cluster)
+                _rsync("src/polymd/", "src/polymd/")
             console.print("[green]✓[/green] Code synchronisé sur CRIANN.")
         with console.status("[cyan]Vérification de CRIANN…", spinner="dots"):
             preflight()
 
-        env = _collect_env(smiles, box_a, n_units, t_step, equil_ps, sample_ps,
-                           mech=mech, tensile=shear, cool_indep=cool_indep)  # --shear pilote E/ν (MECH_TENSILE)
-        if msd:
-            env["MSD_TG"] = 1
-        env.update(window_env)
-        if seeds > 1:
-            jobs = []
-            for s in range(1, seeds + 1):
-                senv = dict(env); senv["SEED"] = s
-                jid, orel = submit(senv, f"{name}_s{s}", time_limit, partition)
-                jobs.append((s, jid, orel, senv))
-            console.print(f"[green]✓[/green] {seeds} seeds soumis : "
-                          + ", ".join(j[1] for j in jobs))
-        else:
-            jobid, out_rel = submit(env, name, time_limit, partition)
+        n1 = len(BLIND_STAGE1) * seeds
+        jids1, orels1, cj1 = _submit_stage(BLIND_STAGE1, "w1")
+        all_orels += orels1; center_jobs += cj1
+        console.print(f"[green]✓[/green] Étape 1 : {n1} fenêtre(s) soumise(s) : {', '.join(jids1)}")
+
+        if detach:
+            console.print(f"[cyan]Détaché.[/cyan] Fenêtres : {', '.join(jids1)}. "
+                          "Recette à relancer manuellement (le mode aveugle a besoin de toutes les fenêtres).")
+            raise typer.Exit(0)
+
+        wait_for_jobs(jids1, label="fenêtres")
+        curves = _pool_windows(all_orels)
+        tg, info = blind_tg_recipe(curves)
+        angle = info.get("angle_deg")
+        n_calc = 1
+
+        # Convergence : coude mou (angle < 48°) → on AJOUTE des fenêtres élargies (∓200 K), pas des seeds.
+        need_more = (not no_converge) and (angle is None or angle < BLIND_ANGLE_THRESH)
+        if need_more:
+            console.print(f"[yellow]Coude {('angle %.0f°' % angle) if angle else 'sans diffusion'} "
+                          f"< {BLIND_ANGLE_THRESH:.0f}° → extension : +{len(BLIND_STAGE2)*seeds} fenêtre(s) ∓300 K.[/yellow]")
+            jids2, orels2, _ = _submit_stage(BLIND_STAGE2, "w2")
+            all_orels += orels2
+            console.print(f"[green]✓[/green] Étape 2 : {len(jids2)} fenêtre(s) : {', '.join(jids2)}")
+            wait_for_jobs(jids2, label="fenêtres élargies")
+            curves = _pool_windows(all_orels)
+            tg, info = blind_tg_recipe(curves)
+            angle = info.get("angle_deg")
+            n_calc = 2
     except SSHError as e:
         console.print(f"[red]✗ Erreur CRIANN :[/red] {e}")
         console.print("[dim]Connexion VPN/SSH active ? Teste : ssh criann hostname[/dim]")
         raise typer.Exit(1)
 
-    if seeds > 1:
-        if detach:
-            console.print(f"[cyan]Détaché.[/cyan] Jobs : {', '.join(j[1] for j in jobs)}")
-            raise typer.Exit(0)
-        wait_for_jobs([j[1] for j in jobs])
-        _finish_seeds(name, smiles, jobs)
-        raise typer.Exit(0)
+    console.print()
+    if tg is None:
+        console.print("[yellow]⚠ Recette aveugle : aucun coude exploitable (densité/⟨u²⟩ absents). "
+                      "Fenêtres mal placées ou jobs échoués ?[/yellow]")
+        raise typer.Exit(1)
 
-    console.print(f"[green]✓[/green] Job soumis : [bold]{jobid}[/bold]  (sortie : {REMOTE_ROOT}/{out_rel})")
-    if detach:
-        console.print(f"[cyan]Détaché.[/cyan] Suivre plus tard : [bold]polycli attach {jobid}[/bold]")
-        raise typer.Exit(0)
+    # ── Propriétés : depuis la/les fenêtre(s) centrale(s) ; Tg remplacée par la valeur poolée aveugle ──
+    per_seed = []
+    for s, orel in center_jobs:
+        log = _ssh(f"cat {REMOTE_ROOT}/{orel} 2>/dev/null", check=False)
+        p = parse_props(log)
+        if p:
+            p["seed"] = s
+            per_seed.append(p)
+    props = aggregate_seeds(per_seed) if len(per_seed) > 1 else (per_seed[0] if per_seed else {})
 
-    log = stream(jobid, out_rel)
-    _finish(name, jobid, smiles, env, log)
+    tg_K = round(tg + 273.15, 1)
+    tier = info.get("tier", "moyenne")
+    props["Tg_pred"] = tg_K
+    props.pop("Tg_pred_ci", None)                       # l'incertitude vient désormais de l'angle, pas du fit mono-fenêtre
+    if info.get("Tg_sim") is not None:
+        props["Tg_sim"] = info["Tg_sim"]
+    props["confidence"] = tier
+
+    render_props(props, f"{name} (aveugle, {len(all_orels)} fenêtres)")
+
+    # ── Panneau Tg aveugle : valeur + niveau de confiance (angle) + diagnostic ──
+    col = {"haute": "green", "moyenne": "yellow", "basse": "red"}.get(tier, "dim")
+    badge = {"haute": "✅", "moyenne": "🟡", "basse": "🔴"}.get(tier, "•")
+    done, conv_ok, conv_msg = converged(angle if angle is not None else 0.0, n_calc,
+                                        angle_thresh=BLIND_ANGLE_THRESH, max_calc=2)
+    lines = [f"[bold]Tg prédite[/bold]  {tg_K:.0f} K  ({tg:.0f} °C)   "
+             f"[{col}]{badge} confiance {tier.upper()}[/{col}]",
+             f"[dim]Valeur via coude {info.get('value_obs','?')} "
+             + (f"+ Prigogine-Defay (écart U−ρ {info['pdefay']:+.0f} K)" if info.get("pdefay") is not None else "")
+             + f" ÷{CAL:g} (correction cinétique)[/dim]",
+             f"[dim]Confiance : angle du coude de diffusion "
+             + (f"{angle:.0f}°" if angle is not None else "n/a") + f" — {conv_msg}[/dim]"]
+    console.print(Panel("\n".join(lines), title="Tg aveugle", border_style=col))
+    if seeds > 1 and per_seed:
+        console.print(f"[dim]Propriétés moyennées sur {len(per_seed)} graine(s) (± = σ/√N).[/dim]")
+    if risk:
+        console.print("[yellow]⚠ Rappel : motif à liaisons H → Tg probablement sous-estimée.[/yellow]")
+
+    env_save = dict(base, CENTER_SIM=round(center_sim), N_WINDOWS=len(all_orels), N_CALC=n_calc)
+    json_path, _ = save_results(name, "aveugle", smiles, env_save, props, "")
+    console.print(f"\n[dim]Résultats : {json_path}[/dim]")
 
 
 @app.command()
