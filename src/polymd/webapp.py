@@ -2,7 +2,7 @@
 CRIANN → logs en direct → tableau des propriétés. RÉUTILISE tout le backend de cli.py (validation,
 drapeau de risque, fenêtre, soumission, parsing). Le calcul reste sur CRIANN (le laptop ne calcule pas).
 
-Lancer :  uv run tgweb   → ouvre http://127.0.0.1:8000
+Lancer :  uv run polyweb   → ouvre http://127.0.0.1:8000
 L'éditeur de molécule est Ketcher (Apache-2.0), servi LOCALEMENT depuis static/ketcher/standalone/.
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import cli
 
-app = FastAPI(title="tgcli — webapp")
+app = FastAPI(title="polyMD — webapp")
 STATIC = Path(__file__).parent / "static"
 # sert le build Ketcher (static/ketcher/standalone/) et les autres fichiers statiques
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -278,7 +278,7 @@ def main():
     import argparse
     import socket
     import uvicorn
-    ap = argparse.ArgumentParser(prog="tgweb", description="Webapp locale tgcli (calcul sur CRIANN).")
+    ap = argparse.ArgumentParser(prog="polyweb", description="Webapp locale polycli (calcul sur CRIANN).")
     ap.add_argument("--host", default="127.0.0.1",
                     help="Interface d'écoute. 127.0.0.1 = ta machine seulement (défaut). "
                          "0.0.0.0 = accessible depuis le réseau local (⚠ aucune authentification : "
@@ -290,11 +290,11 @@ def main():
             lan_ip = socket.gethostbyname(socket.gethostname())
         except OSError:
             lan_ip = args.host
-        print(f"⚠ tgweb exposé sur le RÉSEAU ({args.host}) — AUCUNE authentification.")
+        print(f"⚠ polyweb exposé sur le RÉSEAU ({args.host}) — AUCUNE authentification.")
         print(f"   Tes collègues : http://{lan_ip}:{args.port}/  (même réseau + pare-feu ouvert)")
         print(f"   Tout visiteur peut soumettre des jobs sur TON compte CRIANN.")
     else:
-        print(f"tgcli webapp → http://127.0.0.1:{args.port}  (local uniquement ; --host 0.0.0.0 pour le LAN)")
+        print(f"polycli webapp → http://127.0.0.1:{args.port}  (local uniquement ; --host 0.0.0.0 pour le LAN)")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
 

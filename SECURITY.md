@@ -2,13 +2,13 @@
 
 ## Threat model — read this before exposing the web app
 
-`tgweb` is a **thin front-end** that submits Molecular-Dynamics jobs to an HPC
+`polyweb` is a **thin front-end** that submits Molecular-Dynamics jobs to an HPC
 cluster **over your own SSH connection**. It has **no authentication**: anyone who
 can reach the port can submit jobs that run **on your cluster account** and consume
 your allocation.
 
 By design it binds to **`127.0.0.1` (localhost only)**. You can expose it on a
-**trusted LAN** with `tgweb --host 0.0.0.0` — this is intended for a lab setting
+**trusted LAN** with `polyweb --host 0.0.0.0` — this is intended for a lab setting
 where colleagues without a cluster account compute through yours.
 
 **Hard rules:**

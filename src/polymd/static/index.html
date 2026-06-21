@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>tgcli — polymer properties</title>
+<title>polyMD — polymer properties</title>
 <style>
   :root{ --bg:#0e1116; --side:#161b22; --line:#222b36; --acc:#4fc3f7; --acc2:#0a2530;
          --ok:#5bbf6a; --warn:#ffb74d; --err:#ef5350; --txt:#e6edf3; --dim:#7d8a99; }
@@ -86,7 +86,7 @@
   <!-- ===== SIDEBAR ===== -->
   <aside class="side">
     <div class="brand">
-      <div class="txt"><h1>tgcli</h1><p data-i18n="subtitle">Propriétés MD de polymères · calcul sur CRIANN</p></div>
+      <div class="txt"><h1>polyMD</h1><p data-i18n="subtitle">Propriétés MD de polymères · calcul sur CRIANN</p></div>
       <select id="lang" onchange="setLang(this.value)" title="Language">
         <option value="en">EN</option><option value="fr">FR</option>
       </select>
@@ -343,11 +343,11 @@ document.addEventListener('mouseover',e=>{ const el=e.target.closest('.tip'); if
 document.addEventListener('mouseout',e=>{ if(e.target.closest('.tip')) tipEl.style.display='none'; });
 
 /* ============================ build marker ============================ */
-console.log('%c[tgcli] front-end build 2026-06-07e — multi-seed + i18n + paramètres + info-bulles','color:#4fc3f7');
+console.log('%c[polyMD] front-end build 2026-06-07e — multi-seed + i18n + paramètres + info-bulles','color:#4fc3f7');
 window.addEventListener('load',()=>{ applyI18n(); validate(); });
 
 /* ============================ Ketcher / SMILES grab ============================ */
-function ketcherObj(){ try{ return document.getElementById('ketcher-frame').contentWindow.ketcher; }catch(e){ console.warn('[tgcli] accès iframe refusé:',e); return null; } }
+function ketcherObj(){ try{ return document.getElementById('ketcher-frame').contentWindow.ketcher; }catch(e){ console.warn('[polyMD] accès iframe refusé:',e); return null; } }
 async function ketcherReady(tries){
   for(let i=0;i<(tries||20);i++){ const k=ketcherObj(); if(k&&typeof k.getSmiles==='function') return k; await new Promise(r=>setTimeout(r,200)); }
   return null;
@@ -376,22 +376,22 @@ function frameWasmOk(){ try{ return typeof document.getElementById('ketcher-fram
 function withTimeout(p,ms){ return Promise.race([Promise.resolve(p), new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),ms))]); }
 
 async function grabSmiles(){
-  console.log('[tgcli] grabSmiles cliqué');
+  console.log('[polyMD] grabSmiles cliqué');
   const k=await ketcherReady();
   if(!k){ showValid('<span class="err">✗ '+t('g_notready')+'</span>'); return; }
   let raw=null, ket=null;
   if(frameWasmOk()){
-    try{ raw=await withTimeout(k.getSmiles(),4000); console.log('[tgcli] getSmiles =',raw); }
-    catch(e){ console.warn('[tgcli] getSmiles KO, repli lecture native:',e); }
+    try{ raw=await withTimeout(k.getSmiles(),4000); console.log('[polyMD] getSmiles =',raw); }
+    catch(e){ console.warn('[polyMD] getSmiles KO, repli lecture native:',e); }
   } else {
-    console.warn('[tgcli] WebAssembly absent dans Ketcher → lecture native du dessin (sans Indigo)');
+    console.warn('[polyMD] WebAssembly absent dans Ketcher → lecture native du dessin (sans Indigo)');
   }
   if(!raw||!raw.trim()){
-    try{ ket=structToKet(k); console.log('[tgcli] modèle natif lu ('+ket.length+' o)'); }
-    catch(e){ console.error('[tgcli] lecture native échouée:',e); showValid('<span class="warn">⚠ '+t('g_empty')+'</span>'); return; }
+    try{ ket=structToKet(k); console.log('[polyMD] modèle natif lu ('+ket.length+' o)'); }
+    catch(e){ console.error('[polyMD] lecture native échouée:',e); showValid('<span class="warn">⚠ '+t('g_empty')+'</span>'); return; }
   }
   let d; try{ d=await postValidate(raw, ket); }
-  catch(e){ console.error('[tgcli] /api/validate a échoué:',e); showValid('<span class="err">✗ '+t('g_server')+'</span>'); return; }
+  catch(e){ console.error('[polyMD] /api/validate a échoué:',e); showValid('<span class="err">✗ '+t('g_server')+'</span>'); return; }
   if(!d.norm){ showValid('<span class="err">✗ '+t('g_notconvertible')+'</span>'); return; }
   document.getElementById('smiles').value=d.norm;
   renderValid(d);

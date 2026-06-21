@@ -18,7 +18,7 @@ env/
 # ---- Bundled molecule editor (downloaded, ~97 MB — see README) ----
 src/polymd/static/ketcher/
 
-# ---- Runtime outputs (results & logs saved by tgcli) ----
+# ---- Runtime outputs (results & logs saved by polycli) ----
 outputs/
 *.log
 

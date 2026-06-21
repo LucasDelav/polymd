@@ -11,8 +11,8 @@ runs `python -u src/polymd/pipeline.py`).
 
 ```
 src/polymd/
-  cli.py          # `tgcli` — submit to the cluster, stream logs, parse results
-  webapp.py       # `tgweb` — FastAPI front-end over the same backend
+  cli.py          # `polycli` — submit to the cluster, stream logs, parse results
+  webapp.py       # `polyweb` — FastAPI front-end over the same backend
   static/index.html   # single-file web UI (Ketcher editor, served locally + i18n FR/EN)
   pipeline.py     # the MD engine — one cooling run; runs on the cluster GPU
   md_build.py     # build the oligomer + pack the simulation box
@@ -26,8 +26,8 @@ src/polymd/
 
 ```bash
 uv sync                       # install the local front-end
-uv run tgcli --help
-uv run tgweb                  # http://127.0.0.1:8000
+uv run polycli --help
+uv run polyweb                  # http://127.0.0.1:8000
 ```
 
 The Ketcher editor bundle is **not** committed (~97 MB). Download it once:

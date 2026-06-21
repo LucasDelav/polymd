@@ -1,20 +1,20 @@
-"""tgcli — interface conviviale pour le pipeline MD (SMILES → propriétés), calcul sur CRIANN.
+"""polycli — interface conviviale pour le pipeline MD (SMILES → propriétés), calcul sur CRIANN.
 
 Le calcul (dynamique moléculaire, ~48k atomes, GPU A100) ne tourne PAS sur un laptop :
 il est soumis sur le cluster CRIANN via SLURM. Cette CLI = le « front-end » local :
 elle valide les entrées, soumet le job, **streame les logs en direct**, puis affiche
 et sauvegarde le tableau des propriétés prédites.
 
-Architecture : on NE touche pas à ~/tg_ml/run_pipeline.slurm (workflow manuel). La CLI
-génère son propre job script isolé dans ~/tg_ml/.tgcli/ et le soumet.
+Architecture : on NE touche pas à ~/polymd/run_pipeline.slurm (workflow manuel). La CLI
+génère son propre job script isolé dans ~/polymd/.tgcli/ et le soumet.
 
 Commandes :
-  tgcli run       — soumettre un calcul, suivre, afficher les propriétés
-  tgcli attach     — se rebrancher sur un job déjà lancé (par JOBID)
-  tgcli status     — voir la file SLURM
-  tgcli check      — diagnostiquer la connexion CRIANN
+  polycli run       — soumettre un calcul, suivre, afficher les propriétés
+  polycli attach     — se rebrancher sur un job déjà lancé (par JOBID)
+  polycli status     — voir la file SLURM
+  polycli check      — diagnostiquer la connexion CRIANN
 
-Lancement : `uv run tgcli run` (ou `.venv/bin/tgcli run`).
+Lancement : `uv run polycli run` (ou `.venv/bin/polycli run`).
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from rich.table import Table
 
 # ───────────────────────── Config CRIANN ─────────────────────────
 HOST = "criann"                       # alias ~/.ssh/config (austral.criann.fr)
-REMOTE_ROOT = "~/tg_ml"               # racine du projet sur le cluster
+REMOTE_ROOT = "~/polymd"               # racine du projet sur le cluster
 REMOTE_PY = "conda_openff_gpu/bin/python"   # interpréteur avec OpenMM-CUDA + OpenFF
 REMOTE_JOBDIR = ".tgcli"              # sous-dossier isolé pour nos jobs (relatif à REMOTE_ROOT)
 # Multiplexage SSH : la 1ʳᵉ connexion ouvre un master, les suivantes le réutilisent
@@ -49,7 +49,7 @@ SEP = "<<<TGCLI_SEP>>>"               # séparateur log/état dans les ticks de 
 POLL_S = 6                            # intervalle de polling pendant le streaming
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-LOCAL_OUT = PROJECT_ROOT / "outputs" / "tgcli"
+LOCAL_OUT = PROJECT_ROOT / "outputs" / "polycli"
 
 console = Console()
 app = typer.Typer(add_completion=False, no_args_is_help=True,
@@ -83,7 +83,7 @@ def _rsync(local: str, remote_rel: str) -> None:
         src += "/"
     subprocess.run(
         ["rsync", "-az", "-e", "ssh " + " ".join(SSH_OPTS),
-         src, f"{HOST}:tg_ml/{remote_rel}"],
+         src, f"{HOST}:polymd/{remote_rel}"],
         check=True, capture_output=True, text=True,
     )
 
@@ -293,10 +293,10 @@ def build_job_script(env: dict, out_rel: str, job_name: str,
 cd {REMOTE_ROOT} || exit 1
 export FF_CUDA=1
 {exports}
-echo "=== tgcli | début $(date '+%F %T') | $(hostname) ==="
+echo "=== polycli | début $(date '+%F %T') | $(hostname) ==="
 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null
 {REMOTE_PY} -u src/polymd/pipeline.py
-echo "=== tgcli | fin $(date '+%F %T') ==="
+echo "=== polycli | fin $(date '+%F %T') ==="
 """
 
 
@@ -723,7 +723,7 @@ def run(
         f"[bold]Sweep simulé[/bold]  {t_low:.0f} → {t_high:.0f} K  "
         f"({n_paliers} paliers, pas {step:g} K)\n"
         f"[bold]run[/bold]  {name}   [bold]partition[/bold] {partition}",
-        title="tgcli — pipeline MD → propriétés", border_style="cyan"))
+        title="polycli — pipeline MD → propriétés", border_style="cyan"))
     if n_paliers >= 22:
         console.print(f"[yellow]⚠ {n_paliers} paliers = run long. Resserre la plage "
                       f"ou augmente --t-step pour accélérer.[/yellow]")
@@ -792,7 +792,7 @@ def run(
 
     console.print(f"[green]✓[/green] Job soumis : [bold]{jobid}[/bold]  (sortie : {REMOTE_ROOT}/{out_rel})")
     if detach:
-        console.print(f"[cyan]Détaché.[/cyan] Suivre plus tard : [bold]tgcli attach {jobid}[/bold]")
+        console.print(f"[cyan]Détaché.[/cyan] Suivre plus tard : [bold]polycli attach {jobid}[/bold]")
         raise typer.Exit(0)
 
     log = stream(jobid, out_rel)
@@ -802,13 +802,13 @@ def run(
 @app.command()
 def attach(jobid: str = typer.Argument(..., help="JOBID SLURM à suivre."),
            name: Optional[str] = typer.Option(None, "--name", "-n", help="Étiquette pour la sauvegarde.")):
-    """Se rebrancher sur un job tgcli déjà lancé et récupérer ses résultats."""
+    """Se rebrancher sur un job polycli déjà lancé et récupérer ses résultats."""
     try:
         listing = _ssh(f"ls {REMOTE_ROOT}/{REMOTE_JOBDIR}/*_{jobid}.out 2>/dev/null", check=False).strip()
         if not listing:
             console.print(f"[red]✗[/red] Aucun fichier de sortie pour le job {jobid} dans {REMOTE_JOBDIR}/.")
             raise typer.Exit(1)
-        out_rel = listing.splitlines()[0].split("tg_ml/", 1)[-1]
+        out_rel = listing.splitlines()[0].split("polymd/", 1)[-1]
         name = name or Path(out_rel).stem.rsplit("_", 1)[0]
         log = stream(jobid, out_rel)
     except SSHError as e:

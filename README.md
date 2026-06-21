@@ -10,8 +10,8 @@ cluster**; your laptop only runs a small front-end that submits the job, streams
 the logs live, and shows the results. There are two front-ends over the same
 backend:
 
-- **`tgcli`** — a polished command-line interface.
-- **`tgweb`** — a local web app with a molecule editor (draw the unit), live logs,
+- **`polycli`** — a polished command-line interface.
+- **`polyweb`** — a local web app with a molecule editor (draw the unit), live logs,
   tooltips, English/French UI, and multi-seed averaging.
 
 > Why MD and not ML? An ML model only knows the polymers it was trained on. MD
@@ -42,7 +42,7 @@ confidence tier.
 The project's most accurate Tg path uses **no experimental Tg at all** — it finds the
 transition on its own. It runs as a separate **multi-window orchestrator**,
 `src/polymd/blind_tg.py` (the recipe lives in `src/polymd/tg_blind.py`), which submits several
-windowed cooling runs and pools them. (A plain `tgcli run`/`tgweb` submits a *single*
+windowed cooling runs and pools them. (A plain `polycli run`/`polyweb` submits a *single*
 cooling run and reports a quicker in-run Tg estimate from the one-window ρ(T) hyperbola fit;
 you give it a rough Tg with `-t`/`-r` to centre the window.) The blind driver:
 
@@ -86,7 +86,7 @@ Requires Python ≥ 3.12. Using [uv](https://docs.astral.sh/uv/):
 
 ```bash
 uv sync
-uv run tgcli --help
+uv run polycli --help
 ```
 
 The web app embeds the [Ketcher](https://github.com/epam/ketcher) editor (Apache-2.0),
@@ -102,7 +102,7 @@ mkdir -p src/polymd/static/ketcher && (cd src/polymd/static/ketcher && unzip -q 
 You need SSH access to an HPC cluster with a GPU and a conda environment providing
 **OpenMM (CUDA build), OpenFF Toolkit, ASE, RDKit, NumPy, SciPy**. The front-end
 expects an SSH host alias (default `criann`) and rsyncs the `src/polymd/` package
-(which includes `pipeline.py`, run on the cluster) to `~/tg_ml` on the cluster.
+(which includes `pipeline.py`, run on the cluster) to `~/polymd` on the cluster.
 Adjust `HOST`, `REMOTE_ROOT` and `REMOTE_PY` near the top of `src/polymd/cli.py`
 for your own cluster.
 
@@ -111,17 +111,17 @@ for your own cluster.
 ### CLI
 
 ```bash
-uv run tgcli check                                  # diagnose the cluster connection
-uv run tgcli run -s '*CC(*)c1ccccc1' -t 373         # polystyrene, Tg estimate 373 K
-uv run tgcli run -s '*CC*' -r 350-420 --seeds 3     # PE, Tg range, 3 seeds (mean ± SE)
-uv run tgcli status                                 # SLURM queue
-uv run tgcli attach <JOBID>                         # re-attach to a detached run
+uv run polycli check                                  # diagnose the cluster connection
+uv run polycli run -s '*CC(*)c1ccccc1' -t 373         # polystyrene, Tg estimate 373 K
+uv run polycli run -s '*CC*' -r 350-420 --seeds 3     # PE, Tg range, 3 seeds (mean ± SE)
+uv run polycli status                                 # SLURM queue
+uv run polycli attach <JOBID>                         # re-attach to a detached run
 ```
 
 ### Web app
 
 ```bash
-uv run tgweb                    # → http://127.0.0.1:8000  (localhost only)
+uv run polyweb                    # → http://127.0.0.1:8000  (localhost only)
 ```
 
 Draw the repeat unit (mark the two attachment points `*`), tweak parameters in the
@@ -132,10 +132,10 @@ polyethylene is `*CC*`, polystyrene `*CC(*)c1ccccc1`.
 
 ## Sharing on a LAN — read SECURITY.md first
 
-`tgweb` binds to `127.0.0.1` by default. You can expose it to a **trusted lab LAN**:
+`polyweb` binds to `127.0.0.1` by default. You can expose it to a **trusted lab LAN**:
 
 ```bash
-uv run tgweb --host 0.0.0.0     # colleagues reach http://<your-ip>:8000
+uv run polyweb --host 0.0.0.0     # colleagues reach http://<your-ip>:8000
 ```
 
 This intentionally lets colleagues **without a cluster account** compute through

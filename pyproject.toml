@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 license = { text = "MIT" }
 keywords = ["polymer", "glass-transition", "molecular-dynamics", "cheminformatics", "rdkit"]
 dependencies = [
-    # Front-end local (CLI `tgcli` + web app `tgweb`). Le calcul MD lui-même tourne sur le cluster.
+    # Front-end local (CLI `polycli` + web app `polyweb`). Le calcul MD lui-même tourne sur le cluster.
     "rdkit>=2024.3",       # validation/normalisation du PSMILES, conversion KET
     "typer>=0.12.0",       # CLI
     "rich>=13.7.0",        # affichage CLI
@@ -21,8 +21,8 @@ dependencies = [
 pipeline = ["numpy>=1.26", "scipy>=1.11"]
 
 [project.scripts]
-tgcli = "polymd.cli:app"
-tgweb = "polymd.webapp:main"
+polycli = "polymd.cli:app"
+polyweb = "polymd.webapp:main"
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/polymd/static/index.html" = "polymd/static/index.html"
