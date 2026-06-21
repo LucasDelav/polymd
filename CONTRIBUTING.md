@@ -4,19 +4,22 @@ Thanks for your interest! This is a small research tool, kept deliberately simpl
 
 ## Project layout
 
+All code lives in the one importable package `src/polymd/` (the repo root holds only
+project files: README, pyproject, docs, the fitted `vk_centerer_model.json`). Modules
+imported as `polymd.X`; `pipeline.py` / `blind_tg.py` are also run directly (the cluster
+runs `python -u src/polymd/pipeline.py`).
+
 ```
-src/tg_ml/
+src/polymd/
   cli.py          # `tgcli` — submit to the cluster, stream logs, parse results
   webapp.py       # `tgweb` — FastAPI front-end over the same backend
   static/index.html   # single-file web UI (Ketcher editor, served locally + i18n FR/EN)
-  tg_kinetics.py  # legacy single-window ρ(T) hyperbola / breakpoint fit (the default in-pipeline Tg)
-  tg_blind.py     # blind Tg: VK seed → pooled-window density coude + Prigogine–Defay + diffusion-angle confidence
+  pipeline.py     # the MD engine — one cooling run; runs on the cluster GPU
   md_build.py     # build the oligomer + pack the simulation box
-scripts/
-  pipeline.py     # the MD pipeline itself (one cooling run; runs on the cluster)
+  tg_kinetics.py  # legacy single-window ρ(T) hyperbola / breakpoint fit (the quick in-run Tg)
+  tg_blind.py     # blind Tg recipe: pooled-window density coude + Prigogine–Defay + diffusion-angle confidence
   blind_tg.py     # blind-Tg driver — orchestrates multiple windowed runs and pools them via tg_blind.py
-  vk_centerer.py  # van-Krevelen group-contribution Tg estimate, used to seed the window (predict via vk_centerer_model.json)
-  # compare_exp.py / exp_reference.py — reliability benchmark helpers (research, not the Tg tool)
+  vk_centerer.py  # van-Krevelen group-contribution Tg estimate, seeds the window (predict via vk_centerer_model.json)
 ```
 
 ## Dev setup
@@ -31,7 +34,7 @@ The Ketcher editor bundle is **not** committed (~97 MB). Download it once:
 
 ```bash
 curl -sL https://github.com/epam/ketcher/releases/download/v3.12.0/ketcher-standalone-3.12.0.zip -o /tmp/k.zip
-mkdir -p src/tg_ml/static/ketcher && (cd src/tg_ml/static/ketcher && unzip -q /tmp/k.zip)
+mkdir -p src/polymd/static/ketcher && (cd src/polymd/static/ketcher && unzip -q /tmp/k.zip)
 ```
 
 Running an actual computation needs SSH access to an HPC cluster with an

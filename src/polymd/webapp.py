@@ -149,7 +149,7 @@ async def submit(req: Request):
         cli.preflight()
         if d.get("sync", True):
             cli._rsync("scripts/pipeline.py", "scripts/pipeline.py")
-            cli._rsync("src/tg_ml/", "src/tg_ml/")
+            cli._rsync("src/polymd/", "src/polymd/")
         if seeds > 1:
             # N jobs indépendants (1 graine chacun) → moyenne ± erreur-type σ/√N (cf. cli.aggregate_seeds)
             jobs = []

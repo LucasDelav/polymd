@@ -16,7 +16,7 @@ venv/
 env/
 
 # ---- Bundled molecule editor (downloaded, ~97 MB — see README) ----
-src/tg_ml/static/ketcher/
+src/polymd/static/ketcher/
 
 # ---- Runtime outputs (results & logs saved by tgcli) ----
 outputs/

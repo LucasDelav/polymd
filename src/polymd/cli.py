@@ -77,7 +77,7 @@ def _ssh(remote_cmd: str, *, stdin: Optional[str] = None, timeout: int = 60,
 def _rsync(local: str, remote_rel: str) -> None:
     """Pousse un fichier/dossier local vers REMOTE_ROOT/remote_rel via rsync (réutilise le master SSH).
     NB : pour un DOSSIER (local finissant par '/'), on ré-ajoute le slash que Path() supprime —
-    sinon rsync copie le dossier DANS la cible (→ src/tg_ml/tg_ml/) au lieu d'en synchroniser le contenu."""
+    sinon rsync copie le dossier DANS la cible (→ src/polymd/polymd/) au lieu d'en synchroniser le contenu."""
     src = str(PROJECT_ROOT / local)
     if local.endswith("/"):
         src += "/"
@@ -93,13 +93,13 @@ def preflight() -> None:
     out = _ssh(
         f"cd {REMOTE_ROOT} 2>/dev/null && "
         f"([ -x {REMOTE_PY} ] && echo PY_OK || echo PY_NO); "
-        f"([ -f scripts/pipeline.py ] && echo PIPE_OK || echo PIPE_NO)",
+        f"([ -f src/polymd/pipeline.py ] && echo PIPE_OK || echo PIPE_NO)",
         timeout=25,
     )
     if "PY_OK" not in out:
         raise SSHError(f"{REMOTE_PY} introuvable sur CRIANN (env conda OpenMM-GPU).")
     if "PIPE_OK" not in out:
-        raise SSHError("scripts/pipeline.py introuvable sur CRIANN (sync le projet d'abord).")
+        raise SSHError("src/polymd/pipeline.py introuvable sur CRIANN (sync le projet d'abord).")
 
 
 # ───────────────────────── Validation SMILES ─────────────────────────
@@ -295,7 +295,7 @@ export FF_CUDA=1
 {exports}
 echo "=== tgcli | début $(date '+%F %T') | $(hostname) ==="
 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null
-{REMOTE_PY} -u scripts/pipeline.py
+{REMOTE_PY} -u src/polymd/pipeline.py
 echo "=== tgcli | fin $(date '+%F %T') ==="
 """
 
@@ -652,7 +652,7 @@ def run(
     time_limit: str = typer.Option("02:00:00", "--time", help="Limite de temps SLURM (HH:MM:SS)."),
     seeds: int = typer.Option(1, "--seeds", min=1, help="Nb de graines aléatoires (jobs indépendants). "
                               ">1 → moyenne ± erreur-type (σ/√N) : réduit l'incertitude affichée."),
-    sync: bool = typer.Option(True, "--sync/--no-sync", help="Pousser pipeline.py + src/tg_ml avant soumission."),
+    sync: bool = typer.Option(True, "--sync/--no-sync", help="Pousser pipeline.py + src/polymd avant soumission."),
     detach: bool = typer.Option(False, "--detach", help="Soumettre puis rendre la main (pas de streaming)."),
     force: bool = typer.Option(False, "--force", help="Ignorer l'échec de validation du SMILES."),
     # paramètres avancés (None = défaut du pipeline)
@@ -753,13 +753,14 @@ def run(
     jobs: list = []
     jobid = out_rel = None
     try:
-        with console.status("[cyan]Vérification de CRIANN…", spinner="dots"):
-            preflight()
+        # sync AVANT le preflight : pousse le code (dont src/polymd/pipeline.py) puis vérifie
+        # sa présence. Sans ça, un cluster vierge échouerait au preflight avant d'avoir pu rsync.
         if sync:
             with console.status("[cyan]Synchronisation du code (rsync)…", spinner="dots"):
-                _rsync("scripts/pipeline.py", "scripts/pipeline.py")
-                _rsync("src/tg_ml/", "src/tg_ml/")
+                _rsync("src/polymd/", "src/polymd/")   # contient pipeline.py (lancé sur le cluster)
             console.print("[green]✓[/green] Code synchronisé sur CRIANN.")
+        with console.status("[cyan]Vérification de CRIANN…", spinner="dots"):
+            preflight()
 
         env = _collect_env(smiles, box_a, n_units, t_step, equil_ps, sample_ps,
                            mech=mech, tensile=shear, cool_indep=cool_indep)  # --shear pilote E/ν (MECH_TENSILE)
@@ -834,7 +835,7 @@ def check():
         host = _ssh("hostname", timeout=20).strip()
         console.print(f"[green]✓[/green] SSH OK → {host}")
         preflight()
-        console.print(f"[green]✓[/green] {REMOTE_PY} et scripts/pipeline.py présents.")
+        console.print(f"[green]✓[/green] {REMOTE_PY} et src/polymd/pipeline.py présents.")
         console.print("[bold green]CRIANN prêt.[/bold green]")
     except SSHError as e:
         console.print(f"[red]✗[/red] {e}")

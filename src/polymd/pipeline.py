@@ -15,7 +15,7 @@ MÉTHODE : build compact + OpenFF Sage + HMR 4fs → compression → fonte → r
 (P1 : 20 K/palier, 100+50 ps), en enregistrant PAR PALIER ρ(T) (RHO_T), enthalpie U(T) (U_T), et —
 si MSD_TG=1 — mobilité de cage ⟨u²⟩ (MSD_T) et diffusion D(T) (D_T). Le Tg en-run est une estimation
 RAPIDE (fit hyperbolique de ρ(T) sur la fenêtre courante → ÷1.50). La prédiction Tg AUTORITAIRE vient
-de la méthode AVEUGLE (src/tg_ml/tg_blind.py, pilotée par scripts/blind_tg.py) qui poole plusieurs
+de la méthode AVEUGLE (src/polymd/tg_blind.py, pilotée par scripts/blind_tg.py) qui poole plusieurs
 fenêtres de ces courbes : coude densité + correction Prigogine-Defay, confiance par l'angle du coude
 de diffusion. PLANCHER : ~48k atomes nécessaires (le coude ρ(T) est un signal faible, SNR
 ∝ √(atomes×temps) ; sous 48k le fit latche). Donc pas plus rapide sans perdre la robustesse.
@@ -35,8 +35,8 @@ import os, sys, time, json
 from collections import defaultdict
 from pathlib import Path
 import numpy as np
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from tg_ml import md_build, tg_kinetics
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # .../src → import polymd.*
+from polymd import md_build, tg_kinetics
 
 
 # ───────────────────────── Profiler ─────────────────────────

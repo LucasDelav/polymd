@@ -13,17 +13,18 @@ Usage:
   blind_tg.py "*OCCCOC(*)=O"                 # one PSMILES
   blind_tg.py --batch polymers.json          # [{name, polymer_smiles}, ...]
 
-This is the reference orchestration of src/tg_ml/tg_blind.py over the cluster; it
-reuses tg_ml.cli.submit / wait_for_jobs. See reference-tg-prediction-method memory.
+This is the reference orchestration of src/polymd/tg_blind.py over the cluster; it
+reuses polymd.cli.submit / wait_for_jobs. See reference-tg-prediction-method memory.
 """
 import argparse, json, sys, time
+from pathlib import Path
 import numpy as np
 
-sys.path.insert(0, "src"); sys.path.insert(0, "scripts")
-from tg_ml.tg_blind import (parse_curves, blind_estimate, recenter_target,
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # .../src → import polymd.*
+from polymd.tg_blind import (parse_curves, blind_estimate, recenter_target,
                             blind_tg_recipe, CAL)
-from tg_ml.cli import submit, _ssh, REMOTE_ROOT
-from vk_centerer import features as vk_features
+from polymd.cli import submit, _ssh, REMOTE_ROOT
+from polymd.vk_centerer import features as vk_features
 
 VK = json.load(open("vk_centerer_model.json"))
 _MU, _SD, _WZ = np.array(VK["mu"]), np.array(VK["sd"]), np.array(VK["wz"])

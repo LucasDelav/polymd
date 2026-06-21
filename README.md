@@ -1,4 +1,4 @@
-# tg-md — polymer properties from a monomer SMILES, by Molecular Dynamics
+# polyMD — polymer properties from a monomer SMILES, by Molecular Dynamics
 
 Draw a polymer repeat unit (or type its PSMILES), and get a physics-based
 prediction of its **glass-transition temperature (Tg)**, **density**, refractive
@@ -41,12 +41,12 @@ confidence tier.
 
 The project's most accurate Tg path uses **no experimental Tg at all** — it finds the
 transition on its own. It runs as a separate **multi-window orchestrator**,
-`scripts/blind_tg.py` (the recipe lives in `src/tg_ml/tg_blind.py`), which submits several
+`src/polymd/blind_tg.py` (the recipe lives in `src/polymd/tg_blind.py`), which submits several
 windowed cooling runs and pools them. (A plain `tgcli run`/`tgweb` submits a *single*
 cooling run and reports a quicker in-run Tg estimate from the one-window ρ(T) hyperbola fit;
 you give it a rough Tg with `-t`/`-r` to centre the window.) The blind driver:
 
-1. **Seed** the window with a van-Krevelen group-contribution estimate (`scripts/vk_centerer.py`).
+1. **Seed** the window with a van-Krevelen group-contribution estimate (`src/polymd/vk_centerer.py`).
 2. **Bracket** the transition with 3 cooling windows (centre ± 150 K) and pool all per-step points.
 3. **Value** from the **density coude**: fit the glassy and rubbery asymptotes of ρ(T) and
    intersect them — a window-independent *two-tangent* construction, robust to noise because it
@@ -73,7 +73,7 @@ SMILES ──► validate (RDKit) ──► submit SLURM job over SSH ──► 
    results table ◄── parse properties ◄── stream logs live ◄──────┘
 ```
 
-Each MD run (`scripts/pipeline.py`) builds an oligomer (RDKit ETKDG + MMFF), applies the
+Each MD run (`src/polymd/pipeline.py`) builds an oligomer (RDKit ETKDG + MMFF), applies the
 OpenFF Sage force field with NAGL charges, compresses & melts the box, cools it in steps
 recording **ρ(T), enthalpy U(T), cage mobility ⟨u²⟩(T) and diffusion D(T) per step**, and
 derives all the properties plus a quick in-run Tg estimate. The blind Tg driver above
@@ -94,16 +94,17 @@ whose ~97 MB build is **not** committed. Download it once:
 
 ```bash
 curl -sL https://github.com/epam/ketcher/releases/download/v3.12.0/ketcher-standalone-3.12.0.zip -o /tmp/k.zip
-mkdir -p src/tg_ml/static/ketcher && (cd src/tg_ml/static/ketcher && unzip -q /tmp/k.zip)
+mkdir -p src/polymd/static/ketcher && (cd src/polymd/static/ketcher && unzip -q /tmp/k.zip)
 ```
 
 ### Cluster side (one-time)
 
 You need SSH access to an HPC cluster with a GPU and a conda environment providing
 **OpenMM (CUDA build), OpenFF Toolkit, ASE, RDKit, NumPy, SciPy**. The front-end
-expects an SSH host alias (default `criann`) and pushes `scripts/pipeline.py` +
-`src/tg_ml/` to `~/tg_ml` on the cluster. Adjust `HOST`, `REMOTE_ROOT` and
-`REMOTE_PY` near the top of `src/tg_ml/cli.py` for your own cluster.
+expects an SSH host alias (default `criann`) and rsyncs the `src/polymd/` package
+(which includes `pipeline.py`, run on the cluster) to `~/tg_ml` on the cluster.
+Adjust `HOST`, `REMOTE_ROOT` and `REMOTE_PY` near the top of `src/polymd/cli.py`
+for your own cluster.
 
 ## Usage
 
