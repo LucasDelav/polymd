@@ -386,6 +386,34 @@ def cp_dos_factor(omm_top, omm_system, plat, pos_nm, box_diag_nm, orig_mass, tar
                     "nyquist_cm1": round(float(freq[-1] / 2.99792458e10), 0)}
 
 
+def _compact_json(obj, indent=0, step=1):
+    """JSON valide mais COMPACT pour les logs : les listes de scalaires tiennent sur une ligne, et
+    les matrices (listes de lignes de scalaires, ex. RHO_T/U_T/D_T/les courbes MSD) s'affichent une
+    ligne PAR RANGÉE au lieu d'un nombre par ligne (indent=1 explosait la sortie ~4×). Reste relu
+    sans souci par parse_props/parse_curves (brace-matching + json.loads, formatage indifférent)."""
+    def scal(x):
+        return isinstance(x, (int, float, str, bool)) or x is None
+    def row(xs):                                          # une rangée de scalaires, inline
+        return "[" + ", ".join(json.dumps(y, ensure_ascii=False) for y in xs) + "]"
+    pad, pad2 = " " * (indent * step), " " * ((indent + 1) * step)
+    if isinstance(obj, dict):
+        if not obj:
+            return "{}"
+        body = ",\n".join(f'{pad2}{json.dumps(k, ensure_ascii=False)}: '
+                          f'{_compact_json(v, indent + 1, step)}' for k, v in obj.items())
+        return "{\n" + body + "\n" + pad + "}"
+    if isinstance(obj, (list, tuple)):
+        if not obj:
+            return "[]"
+        if all(scal(x) for x in obj):                    # liste de scalaires → inline
+            return row(obj)
+        if all(isinstance(x, (list, tuple)) and all(scal(y) for y in x) for x in obj):
+            return "[\n" + ",\n".join(pad2 + row(x) for x in obj) + "\n" + pad + "]"  # matrice : 1 ligne/rangée
+        body = ",\n".join(pad2 + _compact_json(x, indent + 1, step) for x in obj)
+        return "[\n" + body + "\n" + pad + "]"
+    return json.dumps(obj, ensure_ascii=False)
+
+
 def main():
     smiles = os.environ.get("SMILES", "*CC(*)c1ccccc1")
     tg_exp = float(os.environ.get("TG_EXP", "373"))
@@ -1035,7 +1063,7 @@ def main():
             props["refractive_index_QM"] = round(float(n_qm), 3)
 
     print("\n=== PROPRIÉTÉS ===")
-    print(json.dumps(props, indent=1))
+    print(_compact_json(props))
     P.report()
 
 
