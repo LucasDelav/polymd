@@ -104,9 +104,9 @@
         <h3 data-i18n="grp_params">Paramètres</h3>
         <div class="two">
           <div>
-            <div class="lblrow"><label for="tg_exp" data-i18n="lbl_tg">Tg estimée (K)</label>
+            <div class="lblrow"><label for="tg_hint" data-i18n="lbl_tg">Tg connue (K) — option.</label>
               <span class="tip" data-tip="tip_tg">i</span></div>
-            <input id="tg_exp" type="number" value="373" oninput="validate()">
+            <input id="tg_hint" type="number" placeholder="auto" oninput="validate()">
           </div>
           <div>
             <div class="lblrow"><label for="partition" data-i18n="lbl_partition">Partition</label>
@@ -166,8 +166,21 @@
 
         <div class="chk"><input id="mech" type="checkbox" checked> <span data-i18n="chk_mech">Calculer module K / δ</span>
           <span class="tip" data-tip="tip_mech">i</span></div>
+        <div class="chk"><input id="no_converge" type="checkbox"> <span data-i18n="chk_noconv">Ne pas étendre les fenêtres</span>
+          <span class="tip" data-tip="tip_noconv">i</span></div>
         <div class="chk"><input id="sync" type="checkbox" checked> <span data-i18n="chk_sync">Synchroniser le code</span>
           <span class="tip" data-tip="tip_sync">i</span></div>
+      </div>
+
+      <div class="grp">
+        <h3 data-i18n="grp_reattach">Reprendre un job</h3>
+        <div class="lblrow"><label for="reattach_id" data-i18n="lbl_reattach">N° de job (run)</label>
+          <span class="tip" data-tip="tip_reattach">i</span></div>
+        <div class="two" style="align-items:stretch">
+          <div style="flex:2"><input id="reattach_id" placeholder="ex. 2393730"></div>
+          <div style="flex:1"><button class="btn-sec" style="margin-top:0;height:100%" onclick="reattach()" data-i18n="btn_reattach">↻ Charger</button></div>
+        </div>
+        <div id="reattach_msg" class="dim" style="font-size:12px;margin-top:6px"></div>
       </div>
     </div>
     <div class="foot"><button id="go" class="btn-go" onclick="run()" data-i18n="launch">▶ Lancer le calcul</button></div>
@@ -197,16 +210,23 @@ const I18N = {
     subtitle:"MD polymer properties · computed on CRIANN",
     grp_motif:"Repeat unit", grab:"↓ Get SMILES from drawing",
     lbl_smiles:"PSMILES (2 attachment points *)",
-    grp_params:"Parameters", lbl_tg:"Estimated Tg (K)", lbl_partition:"Partition",
+    grp_params:"Parameters", lbl_tg:"Known Tg (K) — opt.", lbl_partition:"Partition",
     grp_adv:"Advanced parameters",
     lbl_seeds:"Seeds", lbl_nunits:"Units (n)", lbl_box:"Box (Å)", lbl_tstep:"T step (K)", lbl_time:"SLURM time",
     lbl_equil:"Equil. (ps)", lbl_sample:"Sample (ps)",
     chk_tensile:"Young's modulus E/ν/G (+~15 min)", chk_dielectric:"Dielectric + diffusion (+~20 min)", chk_thermal:"Thermal conductivity κ (+~30 min)", chk_mech:"Compute modulus K / δ", chk_sync:"Sync code",
+    chk_noconv:"Don't extend windows", tip_noconv:"By default, if the diffusion-coude angle stays below 48° (soft knee = uncertain placement) the tool automatically adds 2 wider windows (±300 K) to sharpen the estimate. Tick this to stop after the first 3 windows (faster, fewer GPU jobs).",
+    grp_reattach:"Resume a job", lbl_reattach:"Job number (run)", btn_reattach:"↻ Load",
+    tip_reattach:"Enter any job number shown for a run you launched (the run ID or any of its window jobs) to reconnect to it — useful after a page reload or from another machine.",
+    ra_loading:"Loading…", ra_notfound:"No run found for this number.", ra_badid:"Enter a numeric job ID.", ra_resumed:"Resumed run {id}.",
+    blind_title:"Blind Tg", blind_tg:"Predicted Tg", blind_conf:"confidence",
+    blind_value:"value via {obs} coude", blind_pdefay:" + Prigogine-Defay (U−ρ {p} K)", blind_angle:"diffusion-coude angle {a}°", blind_noangle:"no diffusion signal",
+    blind_converged:"converged (angle ≥ 48°)", blind_notconv:"stopped (soft knee, angle < 48°)",
     launch:"▶ Launch", status_start:"Draw the unit, then launch", newdraw:"← New drawing",
     // tooltips
     tip_seeds:"Number of independent random-seed runs (1 GPU job each). With >1, results are averaged and shown as mean ± standard error (σ/√N), which shrinks the uncertainty. 3–5 is a good trade-off; each seed costs one full run.",
     tip_smiles:"SMILES of the repeat unit with exactly 2 attachment points (*). Each * is where the unit links to the next. Ex. polystyrene: *CC(*)c1ccccc1",
-    tip_tg:"Known or estimated glass-transition temperature (K). Used ONLY to center the cooling window — not a target value. A rough guess is fine.",
+    tip_tg:"OPTIONAL. Leave empty: the cooling window is auto-centered from a van-Krevelen group-contribution seed (no experimental data needed). Fill it only if you already know a rough Tg (K) — it then overrides the auto seed.",
     tip_partition:"CRIANN GPU partition. gpu = standard A100; gpu_debug = short ≤30 min queue (may be too short for a full run); gpu_h200 = H200 GPU.",
     tip_nunits:"Degree of polymerization of the oligomer chain (default 40). Higher = longer chains and slower building.",
     tip_box:"Simulation box edge in Å (default 80 ≈ 48,000 atoms). Do NOT reduce below ~80: under it the weak Tg signal drowns in noise (a statistical floor, not a bug).",
@@ -225,7 +245,8 @@ const I18N = {
     v_empty:"Draw the repeat unit with 2 attachment points *.",
     v_unparsable:"SMILES not parsable.",
     v_attach:"A PSMILES needs exactly 2 attachment points * (found: {n}).",
-    v_window:"Window {lo}→{hi} K · {n} steps",
+    v_seed:"Auto seed {s} K → simulated center {c} K",
+    v_seed_hint:"Seed {s} K (yours) → simulated center {c} K",
     v_risk:"{m} → Tg possibly underestimated",
     risk_amide:"amide", risk_urethane:"urethane", risk_urea:"urea", risk_carboxylic_acid:"carboxylic acid",
     // grab feedback
@@ -234,10 +255,11 @@ const I18N = {
     g_server:"Server unreachable for normalization.",
     g_notconvertible:"Drawing not convertible to PSMILES. Make sure there are exactly 2 attachment points *.",
     // run
-    r_submitting:"Submitting to CRIANN…", r_submitted:"✓ Job {id} submitted",
-    r_seeds_submitted:"✓ {n} seeds submitted: {ids}",
-    r_queued:"Job {id} queued…", r_state:"Job {id} · {state}…",
-    r_seedstate:"{done}/{total} seeds done…",
+    r_submitting:"Submitting to CRIANN…",
+    r_windows_submitted:"✓ Stage 1: {n} windows submitted — {ids}",
+    r_windowstate:"{done}/{total} windows done (stage {stage})…",
+    r_stage2:"↳ Soft knee (angle {a}°) → adding {n} wider windows (±300 K): {ids}",
+    r_resuming:"↻ Resuming run {id}…",
     r_done:"Done", r_failed:"failed", r_neterr:"Network error",
     r_risk:"⚠ motif {m}: Tg possibly underestimated",
     err_invalid:"Invalid PSMILES.", err_ssh:"CRIANN connection error.",
@@ -263,15 +285,22 @@ const I18N = {
     subtitle:"Propriétés MD de polymères · calcul sur CRIANN",
     grp_motif:"Motif de répétition", grab:"↓ Récupérer le SMILES du dessin",
     lbl_smiles:"PSMILES (2 points d'attache *)",
-    grp_params:"Paramètres", lbl_tg:"Tg estimée (K)", lbl_partition:"Partition",
+    grp_params:"Paramètres", lbl_tg:"Tg connue (K) — option.", lbl_partition:"Partition",
     grp_adv:"Paramètres avancés",
     lbl_seeds:"Graines", lbl_nunits:"Unités (n)", lbl_box:"Boîte (Å)", lbl_tstep:"Pas T (K)", lbl_time:"Temps SLURM",
     lbl_equil:"Équil. (ps)", lbl_sample:"Mesure (ps)",
     chk_tensile:"Module d'Young E/ν/G (+~15 min)", chk_dielectric:"Diélectrique + diffusion (+~20 min)", chk_thermal:"Conductivité thermique κ (+~30 min)", chk_mech:"Calculer module K / δ", chk_sync:"Synchroniser le code",
+    chk_noconv:"Ne pas étendre les fenêtres", tip_noconv:"Par défaut, si l'angle du coude de diffusion reste sous 48° (coude mou = centrage incertain), l'outil ajoute automatiquement 2 fenêtres plus larges (±300 K) pour affiner. Coche pour s'arrêter après les 3 premières fenêtres (plus rapide, moins de jobs GPU).",
+    grp_reattach:"Reprendre un job", lbl_reattach:"N° de job (run)", btn_reattach:"↻ Charger",
+    tip_reattach:"Saisis n'importe quel N° de job affiché pour un run que tu as lancé (le run ID ou l'un de ses jobs de fenêtre) pour t'y reconnecter — utile après un rechargement de page ou depuis une autre machine.",
+    ra_loading:"Chargement…", ra_notfound:"Aucun run trouvé pour ce numéro.", ra_badid:"Saisis un N° de job numérique.", ra_resumed:"Run {id} repris.",
+    blind_title:"Tg aveugle", blind_tg:"Tg prédite", blind_conf:"confiance",
+    blind_value:"valeur via coude {obs}", blind_pdefay:" + Prigogine-Defay (U−ρ {p} K)", blind_angle:"angle du coude de diffusion {a}°", blind_noangle:"pas de signal de diffusion",
+    blind_converged:"convergé (angle ≥ 48°)", blind_notconv:"arrêté (coude mou, angle < 48°)",
     launch:"▶ Lancer le calcul", status_start:"Dessine le motif, puis lance le calcul", newdraw:"← Nouveau dessin",
     tip_seeds:"Nombre de runs à graines aléatoires indépendantes (1 job GPU chacun). Avec >1, les résultats sont moyennés et affichés en moyenne ± erreur-type (σ/√N), ce qui réduit l'incertitude. 3–5 est un bon compromis ; chaque graine coûte un run complet.",
     tip_smiles:"SMILES du motif de répétition avec exactement 2 points d'attache (*). Chaque * marque la liaison vers le motif suivant. Ex. polystyrène : *CC(*)c1ccccc1",
-    tip_tg:"Tg connue ou estimée (K). Sert UNIQUEMENT à centrer la fenêtre de refroidissement — pas une valeur cible. Une estimation grossière suffit.",
+    tip_tg:"OPTIONNEL. Laisse vide : la fenêtre est auto-centrée par une graine de contribution de groupes (van-Krevelen), sans aucune donnée expérimentale. Ne le remplis que si tu connais déjà une Tg approchée (K) — elle remplace alors la graine auto.",
     tip_partition:"Partition GPU CRIANN. gpu = A100 standard ; gpu_debug = file courte ≤30 min (souvent trop court pour un run complet) ; gpu_h200 = GPU H200.",
     tip_nunits:"Degré de polymérisation de l'oligomère (défaut 40). Plus grand = chaînes plus longues, construction plus lente.",
     tip_box:"Arête de la boîte de simulation en Å (défaut 80 ≈ 48 000 atomes). NE PAS descendre sous ~80 : en-dessous, le faible signal de Tg se noie dans le bruit (plancher statistique, pas un bug).",
@@ -289,17 +318,19 @@ const I18N = {
     v_empty:"Dessine le motif avec 2 points d'attache *.",
     v_unparsable:"SMILES non parsable.",
     v_attach:"Un PSMILES doit avoir exactement 2 points d'attache * (trouvé : {n}).",
-    v_window:"Fenêtre {lo}→{hi} K · {n} paliers",
+    v_seed:"Graine auto {s} K → centre simulé {c} K",
+    v_seed_hint:"Graine {s} K (la tienne) → centre simulé {c} K",
     v_risk:"{m} → Tg possiblement sous-estimée",
     risk_amide:"amide", risk_urethane:"uréthane", risk_urea:"urée", risk_carboxylic_acid:"acide carboxylique",
     g_notready:"Éditeur pas encore prêt — laisse Ketcher finir de charger puis réessaie.",
     g_empty:"Dessin vide — trace le motif avec 2 points d'attache *.",
     g_server:"Serveur injoignable pour la normalisation.",
     g_notconvertible:"Dessin non convertible en PSMILES. Vérifie qu'il y a bien 2 points d'attache *.",
-    r_submitting:"Soumission sur CRIANN…", r_submitted:"✓ Job {id} soumis",
-    r_seeds_submitted:"✓ {n} graines soumises : {ids}",
-    r_queued:"Job {id} en file…", r_state:"Job {id} · {state}…",
-    r_seedstate:"{done}/{total} graines terminées…",
+    r_submitting:"Soumission sur CRIANN…",
+    r_windows_submitted:"✓ Étape 1 : {n} fenêtres soumises — {ids}",
+    r_windowstate:"{done}/{total} fenêtres terminées (étape {stage})…",
+    r_stage2:"↳ Coude mou (angle {a}°) → ajout de {n} fenêtres élargies (±300 K) : {ids}",
+    r_resuming:"↻ Reprise du run {id}…",
     r_done:"Terminé", r_failed:"échec", r_neterr:"Erreur réseau",
     r_risk:"⚠ motif {m} : Tg possiblement sous-estimée",
     err_invalid:"PSMILES invalide.", err_ssh:"Erreur de connexion CRIANN.",
@@ -343,8 +374,8 @@ document.addEventListener('mouseover',e=>{ const el=e.target.closest('.tip'); if
 document.addEventListener('mouseout',e=>{ if(e.target.closest('.tip')) tipEl.style.display='none'; });
 
 /* ============================ build marker ============================ */
-console.log('%c[polyMD] front-end build 2026-06-07e — multi-seed + i18n + paramètres + info-bulles','color:#4fc3f7');
-window.addEventListener('load',()=>{ applyI18n(); validate(); });
+console.log('%c[polyMD] front-end build 2026-06-21a — orchestrateur aveugle + reprise/reattach','color:#4fc3f7');
+window.addEventListener('load',()=>{ applyI18n(); validate(); resumeFromStorage(); });
 
 /* ============================ Ketcher / SMILES grab ============================ */
 function ketcherObj(){ try{ return document.getElementById('ketcher-frame').contentWindow.ketcher; }catch(e){ console.warn('[polyMD] accès iframe refusé:',e); return null; } }
@@ -401,7 +432,7 @@ async function grabSmiles(){
 function val(id){ const e=document.getElementById(id); return e?e.value:''; }
 async function postValidate(s,ket){
   return await(await fetch('/api/validate',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({smiles:s||'',ket:ket||null,tg_exp:val('tg_exp'),t_step:val('t_step')})})).json();
+    body:JSON.stringify({smiles:s||'',ket:ket||null,tg_hint:val('tg_hint')})})).json();
 }
 function renderValid(d){
   if(!d.ok){
@@ -412,7 +443,8 @@ function renderValid(d){
   document.getElementById('go').disabled=false;
   const okmsg = (d.n_heavy==null) ? t('v_ok_nordkit') : t('v_ok',{n:d.n_heavy});
   let h='<span class="ok">✓ '+okmsg+'</span>';
-  if(d.win_lo!=null) h+='<br><span class="dim">'+t('v_window',{lo:d.win_lo,hi:d.win_hi,n:d.paliers})+'</span>';
+  if(d.seed_K!=null){ const key=d.seed_src==='hint'?'v_seed_hint':'v_seed';
+    h+='<br><span class="dim">'+t(key,{s:d.seed_K,c:d.center_sim})+'</span>'; }
   if(d.risk&&d.risk.length){ const names=d.risk.map(r=>t('risk_'+r)).join(', ');
     h+='<br><span class="pill">⚠ '+t('v_risk',{m:names})+'</span>'; }
   showValid(h);
@@ -445,57 +477,109 @@ function backToDraw(){ document.getElementById('log-view').classList.add('hidden
   document.getElementById('draw-view').classList.remove('hidden');
   document.getElementById('newbtn').classList.add('hidden'); setStatus(t('status_start')); }
 
-async function run(){
-  const go=document.getElementById('go'); go.disabled=true;
+const RUN_KEY='polymd_run';        // localStorage : run_id en cours → survit au rechargement de page
+let curES=null;
+function showLogView(){
   document.getElementById('draw-view').classList.add('hidden');
   document.getElementById('log-view').classList.remove('hidden');
   document.getElementById('newbtn').classList.remove('hidden');
-  document.getElementById('log').innerHTML=''; document.getElementById('results').classList.add('hidden');
-  setStatus(t('r_submitting'),'run'); logln(t('r_submitting'),'dim');
-  const body={smiles:val('smiles'), tg_exp:val('tg_exp'), partition:val('partition'),
+}
+function buildBody(){
+  return {smiles:val('smiles'), tg_hint:val('tg_hint'), partition:val('partition'),
     seeds:val('seeds'), n_units:val('n_units'), box_a:val('box_a'), t_step:val('t_step'),
     equil_ps:val('equil_ps'), sample_ps:val('sample_ps'), time:val('time'),
     mech:document.getElementById('mech').checked,
-    tensile:document.getElementById('tensile').checked,
+    shear:document.getElementById('tensile').checked,
     dielectric:document.getElementById('dielectric').checked,
     thermal:document.getElementById('thermal').checked,
+    no_converge:document.getElementById('no_converge').checked,
     sync:document.getElementById('sync').checked};
-  let res; try{ res=await(await fetch('/api/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json(); }
+}
+
+async function run(){
+  const go=document.getElementById('go'); go.disabled=true;
+  showLogView();
+  document.getElementById('log').innerHTML=''; document.getElementById('results').classList.add('hidden');
+  setStatus(t('r_submitting'),'run'); logln(t('r_submitting'),'dim');
+  let res; try{ res=await(await fetch('/api/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(buildBody())})).json(); }
   catch(e){ logln(t('r_neterr'),'err'); setStatus(t('r_failed')); go.disabled=false; return; }
   if(res.error){ const m=res.error==='ssh'?t('err_ssh'):t('err_invalid');
     logln('✗ '+m+(res.detail?' '+res.detail:''),'err'); setStatus(t('r_failed')); go.disabled=false; return; }
-  if(res.risk&&res.risk.length){ const names=res.risk.map(r=>t('risk_'+r)).join(','); logln(t('r_risk',{m:names}),'warn'); }
+  startRun(res.run_id, res.manifest, false);
+}
 
-  let es;
-  if(res.multi){                                   // ── multi-seed : N jobs → moyenne ± erreur-type ──
-    const ids=res.jobs.map(j=>j.jobid).join(', ');
-    logln(t('r_seeds_submitted',{n:res.jobs.length,ids:ids}),'ok');
-    setStatus(t('r_seedstate',{done:0,total:res.jobs.length}),'run');
-    es=new EventSource('/api/stream_seeds?jobs='+encodeURIComponent(JSON.stringify(res.jobs)));
-  } else {                                         // ── single-seed ──
-    logln(t('r_submitted',{id:res.jobid}),'ok'); setStatus(t('r_queued',{id:res.jobid}),'run');
-    es=new EventSource('/api/stream/'+res.jobid+'?out_rel='+encodeURIComponent(res.out_rel));
-  }
+// Démarre/branche le streaming d'un run (nouveau, repris au rechargement, ou rattaché par N°).
+function startRun(runId, manifest, resumed){
+  localStorage.setItem(RUN_KEY, runId);
+  if(manifest && manifest.risk && manifest.risk.length){
+    const names=manifest.risk.map(r=>t('risk_'+r)).join(','); logln(t('r_risk',{m:names}),'warn'); }
+  if(resumed){ logln(t('r_resuming',{id:runId}),'ok'); }
+  else { const ids=manifest?manifest.windows.map(w=>w.jobid).join(', '):runId;
+    logln(t('r_windows_submitted',{n:manifest?manifest.windows.length:3, ids:ids}),'ok'); }
+  openStream(runId);
+}
+
+function openStream(runId){
+  if(curES){ curES.close(); }
+  const go=document.getElementById('go'); go.disabled=true;
+  const es=new EventSource('/api/blind_stream/'+runId); curES=es;
   es.onmessage=(ev)=>{ const m=JSON.parse(ev.data);
     if(m.log!==undefined) logln(m.log);
-    else if(m.seedstate) setStatus(t('r_seedstate',{done:m.seedstate.done,total:m.seedstate.total}),'run');
-    else if(m.state) setStatus(t('r_state',{id:res.jobid,state:m.state}),'run');
-    else if(m.done){ es.close(); go.disabled=false; setStatus(t('r_done'),'ok'); render(m.props,m.per_seed_tg); } };
-  es.onerror=()=>{ es.close(); go.disabled=false; };
+    else if(m.windowstate) setStatus(t('r_windowstate',{done:m.windowstate.done,total:m.windowstate.total,stage:m.windowstate.stage}),'run');
+    else if(m.stage2){ logln(t('r_stage2',{a:(m.stage2.angle!=null?m.stage2.angle:'?'),n:m.stage2.added,ids:m.stage2.jobids.join(', ')}),'warn'); }
+    else if(m.done){ es.close(); curES=null; localStorage.removeItem(RUN_KEY); go.disabled=false;
+      setStatus(t('r_done'),'ok'); render(m.props, m.blind); } };
+  es.onerror=()=>{ es.close(); curES=null; go.disabled=false; };
 }
+
+// Rattacher un run par N° de job (le run_id OU n'importe quel job de fenêtre).
+async function reattach(){
+  const raw=(val('reattach_id')||'').trim(); const msg=document.getElementById('reattach_msg');
+  if(!/^[0-9]{1,12}$/.test(raw)){ msg.innerHTML='<span class="err">'+t('ra_badid')+'</span>'; return; }
+  msg.textContent=t('ra_loading');
+  let res; try{ res=await(await fetch('/api/run/'+raw)).json(); }
+  catch(e){ msg.innerHTML='<span class="err">'+t('r_neterr')+'</span>'; return; }
+  if(res.error||!res.run_id){ msg.innerHTML='<span class="warn">'+t('ra_notfound')+'</span>'; return; }
+  msg.innerHTML='<span class="ok">'+t('ra_resumed',{id:res.run_id})+'</span>';
+  showLogView(); document.getElementById('log').innerHTML='';
+  document.getElementById('results').classList.add('hidden');
+  setStatus(t('r_resuming',{id:res.run_id}),'run');
+  startRun(res.run_id, res.manifest, true);
+}
+
+// Reprise automatique après un rechargement de page (le run_id est en localStorage).
+function resumeFromStorage(){
+  const runId=localStorage.getItem(RUN_KEY); if(!runId) return;
+  fetch('/api/run/'+runId).then(r=>r.json()).then(res=>{
+    if(res.error||!res.run_id){ localStorage.removeItem(RUN_KEY); return; }
+    showLogView(); setStatus(t('r_resuming',{id:res.run_id}),'run');
+    startRun(res.run_id, res.manifest, true);
+  }).catch(()=>{ /* hors-ligne : on garde le run_id pour un prochain essai */ });
+}
+
 let lastResult=null;
-function render(p,perSeed){
+function render(p, blind){
   const r=document.getElementById('results'); r.classList.remove('hidden');
-  if(!p){ r.innerHTML='<span class="err">'+t('noprops')+'</span>'; lastResult=null; return; }
-  lastResult=p;                                       // JSON complet (toutes les clés) pour le téléchargement
-  let h='<h3>'+t('res_title')+'</h3><table>';
+  let h='';
+  if(blind){                                          // ── panneau Tg aveugle : valeur + confiance ──
+    const col={haute:'ok',moyenne:'warn',basse:'err'}[blind.tier]||'dim';
+    h+='<div style="margin-bottom:12px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:#0c1219">';
+    h+='<div style="font-size:15px"><b>'+t('blind_tg')+' '+blind.tg_K+' K</b> <span class="dim">('+blind.tg_C+' °C)</span>'
+      +' &nbsp; <span class="'+col+'">● '+t('blind_conf')+' '+(blind.tier||'').toUpperCase()+'</span></div>';
+    let line=t('blind_value',{obs:blind.value_obs||'?'});
+    if(blind.pdefay!=null) line+=t('blind_pdefay',{p:(blind.pdefay>=0?'+':'')+blind.pdefay});
+    h+='<div class="dim" style="font-size:12px;margin-top:4px">'+line+'</div>';
+    const ang=(blind.angle!=null)?t('blind_angle',{a:blind.angle}):t('blind_noangle');
+    h+='<div class="dim" style="font-size:12px">'+ang+' · '+(blind.converged?t('blind_converged'):t('blind_notconv'))
+      +' · '+blind.n_windows+' fen.</div></div>';
+  }
+  if(!p){ r.innerHTML=h+'<span class="err">'+t('noprops')+'</span>'; lastResult=blind?{blind:blind}:null; return; }
+  lastResult=Object.assign({}, p, blind?{blind:blind}:{});   // JSON complet pour le téléchargement
+  h+='<h3>'+t('res_title')+'</h3><table>';
   for(const [k,u] of PROPS){ if(p[k]==null) continue; const ci=p[k+'_ci'];
     h+='<tr><td>'+t(k)+'</td><td class="v">'+p[k]+(ci?' ± '+ci:'')+'</td><td class="dim">'+u+'</td></tr>'; }
   h+='</table>';
   if(p.n_seeds>1) h+='<div class="dim" style="margin-top:8px;font-size:12px">'+t('res_seeds_note',{n:p.n_seeds,r:p.n_reliable})+'</div>';
-  if(perSeed){ const d=Object.keys(perSeed).map(s=>'s'+s+'='+perSeed[s]).join(', ');
-    h+='<div class="dim" style="font-size:12px">'+t('res_perseed',{d:d})+'</div>'; }
-  if(p.fit_reliable===false) h+='<div class="warn" style="margin-top:8px;font-size:12px">'+t('res_unreliable')+(p.fit_recommendation?' — '+escapeHtml(p.fit_recommendation):'')+'</div>';
   h+='<button class="btn-sec" onclick="downloadJson()" data-i18n="btn_download">'+t('btn_download')+'</button>';
   r.innerHTML=h;
 }

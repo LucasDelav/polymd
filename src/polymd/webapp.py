@@ -85,10 +85,64 @@ def _num(x):
         return None
 
 
+# ───────────────────────── Persistance des runs (rechargement / reattach par N° de job) ─────────────────────────
+# Un run aveugle = 3-5 fenêtres. On écrit un MANIFESTE serveur (clé = jobid de la fenêtre centrale) qui
+# fait AUTORITÉ : le stage-2 ajoute des fenêtres pendant le streaming, donc un client rechargé doit relire
+# l'état serveur. Le client ne garde que le run_id en localStorage. /api/run/{N} retrouve le manifeste par
+# run_id OU par n'importe quel jobid contenu → on peut recharger la page ou saisir un N° de job vu à l'écran.
+RUNS_DIR = cli.LOCAL_OUT / "runs"
+MARK = "<<<TGCLI_WIN:"            # marqueur de début de log par fenêtre dans un tick multi-fenêtres
+
+
+def _sse(obj) -> str:
+    return f"data: {json.dumps(obj)}\n\n"
+
+
+def _run_path(run_id: str) -> Path:
+    return RUNS_DIR / f"{_check_jobid(run_id)}.json"
+
+
+def _save_manifest(m: dict) -> None:
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    _run_path(m["run_id"]).write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _load_manifest(run_id: str):
+    try:
+        p = _run_path(run_id)
+    except ValueError:
+        return None
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _find_manifest(ident: str):
+    """Par run_id direct, sinon par n'importe quel jobid de fenêtre contenu dans un manifeste."""
+    ident = str(ident or "")
+    if not JOBID_RE.match(ident):
+        return None
+    m = _load_manifest(ident)
+    if m:
+        return m
+    if RUNS_DIR.exists():
+        for p in RUNS_DIR.glob("*.json"):
+            try:
+                mm = json.loads(p.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            if any(str(w.get("jobid")) == ident for w in mm.get("windows", [])):
+                return mm
+    return None
+
+
 @app.post("/api/validate")
 async def validate(req: Request):
     """Validation live STRUCTURÉE du PSMILES (codes + nombres, le texte est localisé côté client) :
-    points d'attache, atomes lourds, clés de risque, fenêtre de température + nb de paliers."""
+    points d'attache, atomes lourds, clés de risque + graine van-Krevelen → centre simulé auto."""
     d = await req.json()
     raw = (d.get("smiles") or "").strip()[:MAX_SMILES]
     ket = d.get("ket")
@@ -102,20 +156,31 @@ async def validate(req: Request):
     out = {**info, "norm": smiles,
            "risk": cli.chemistry_risk(smiles) if info["ok"] else []}
     if info["ok"]:
-        try:
-            tg = float(d.get("tg_exp") or 373)
-            step = _num(d.get("t_step")) or 20.0
-            win, _, _ = cli.resolve_temperature(tg, None)
-            t_hi, t_lo, n_pal = cli.effective_window(win, step)
-            out.update({"win_lo": round(t_lo), "win_hi": round(t_hi), "paliers": n_pal})
-        except Exception:
-            pass
+        hint = _num(d.get("tg_hint"))               # override optionnel de la graine
+        if hint is not None:
+            out.update({"seed_K": round(hint), "center_sim": round(1.5 * hint), "seed_src": "hint"})
+        else:
+            seed = cli.vk_seed_K(smiles)
+            if seed is not None:
+                out.update({"seed_K": round(seed), "center_sim": round(1.5 * seed), "seed_src": "vk"})
     return out
+
+
+def _base_env_from(d: dict, smiles: str) -> dict:
+    nu = _num(d.get("n_units"))
+    n_units = int(nu) if nu else None
+    return cli._collect_env(smiles, _num(d.get("box_a")), n_units, _num(d.get("t_step")),
+                            _num(d.get("equil_ps")), _num(d.get("sample_ps")),
+                            mech=bool(d.get("mech", True)),
+                            tensile=bool(d.get("shear", d.get("tensile", False))),  # case "Module d'Young"
+                            dielectric=bool(d.get("dielectric", False)),            # case "Diélectrique"
+                            thermal=bool(d.get("thermal", False)))                  # case "Conductivité κ"
 
 
 @app.post("/api/submit")
 async def submit(req: Request):
-    """Valide, (re)synchronise le code, soumet le job sur CRIANN. Renvoie le jobid + le fichier de sortie."""
+    """Submit AVEUGLE : graine VK (ou tg_hint) → 3 fenêtres ∓150 K × graines. Écrit le manifeste serveur,
+    renvoie {run_id, manifest}. La recette (poolage + densité/Prigogine-Defay) se fait au streaming."""
     d = await req.json()
     raw = (d.get("smiles") or "").strip()
     smiles = cli.normalize_psmiles(raw) or raw      # jamais de %91/CXSMILES jusqu'à CRIANN
@@ -123,152 +188,176 @@ async def submit(req: Request):
     if not info["ok"]:
         return JSONResponse({"error": "invalid_psmiles", "code": info["code"],
                              "n_attach": info["n_attach"]}, status_code=400)
-    tg_exp = _num(d.get("tg_exp")) or 373.0
-    win, _, desc = cli.resolve_temperature(tg_exp, None)
-    win["TG_DESC"] = desc
-    nu = _num(d.get("n_units"))
-    n_units = int(nu) if nu else None
-    env = cli._collect_env(smiles, _num(d.get("box_a")), n_units, _num(d.get("t_step")),
-                           _num(d.get("equil_ps")), _num(d.get("sample_ps")),
-                           mech=bool(d.get("mech", True)),
-                           tensile=bool(d.get("tensile", False)),        # case "Module d'Young" (coûteux)
-                           dielectric=bool(d.get("dielectric", False)),  # case "Diélectrique+diffusion" (coûteux)
-                           thermal=bool(d.get("thermal", False)))        # case "Conductivité thermique κ" (coûteux)
-    env.update(win)
+    # graine : Tg expérimentale estimée → centre SIMULÉ = 1.5×graine
+    hint = _num(d.get("tg_hint"))
+    if hint is not None:
+        seed_K, seed_src = float(hint), "hint"
+    else:
+        seed_K = cli.vk_seed_K(smiles)
+        seed_src = "vk"
+        if seed_K is None:
+            seed_K, seed_src = 373.0, "default"
+    center_sim = 1.5 * seed_K
+    base = _base_env_from(d, smiles)
     name = cli._slug(smiles)
-    seeds = max(1, min(20, int(_num(d.get("seeds")) or 1)))      # borne aussi le nb de jobs (anti-abus)
-    # partition + temps SLURM sont écrits TELS QUELS dans des directives #SBATCH du script → liste blanche
-    # + format strict (sinon un retour-ligne injecterait des lignes de script exécutées sur le nœud).
+    seeds = max(1, min(8, int(_num(d.get("seeds")) or 1)))       # borne le nb de jobs (anti-abus)
+    # partition + temps SLURM sont écrits TELS QUELS dans des directives #SBATCH → liste blanche + format strict
     partition = d.get("partition", "gpu")
     if partition not in PARTITIONS:
         return JSONResponse({"error": "bad_partition"}, status_code=400)
     time_limit = d.get("time", "02:00:00")
     if not TIME_RE.match(str(time_limit)):
         return JSONResponse({"error": "bad_time"}, status_code=400)
+    converge = not bool(d.get("no_converge", False))
     try:
         cli.preflight()
         if d.get("sync", True):
-            cli._rsync("scripts/pipeline.py", "scripts/pipeline.py")
             cli._rsync("src/polymd/", "src/polymd/")
-        if seeds > 1:
-            # N jobs indépendants (1 graine chacun) → moyenne ± erreur-type σ/√N (cf. cli.aggregate_seeds)
-            jobs = []
-            for s in range(1, seeds + 1):
-                senv = dict(env); senv["SEED"] = s
-                jid, orel = cli.submit(senv, f"{name}_s{s}", time_limit, partition)
-                jobs.append({"seed": s, "jobid": jid, "out_rel": orel})
-            return {"multi": True, "jobs": jobs, "name": name, "risk": cli.chemistry_risk(smiles)}
-        jobid, out_rel = cli.submit(env, name, time_limit, partition)
+        windows, central_jobid = [], None
+        for s in range(1, seeds + 1):
+            for off in cli.BLIND_STAGE1:
+                full = (off == 0.0)
+                env = cli._blind_window_env(base, center_sim, off, full_props=full)
+                if seeds > 1:
+                    env["SEED"] = s
+                tag = f"{name}_w1_s{s}_{off:+.0f}".replace("+", "p").replace("-", "m")
+                jid, orel = cli.submit(env, tag, time_limit, partition)
+                windows.append({"jobid": jid, "out_rel": orel, "offset": off,
+                                "central": full, "seed": s})
+                if full and s == 1:
+                    central_jobid = jid
     except cli.SSHError as e:
         return JSONResponse({"error": "ssh", "detail": str(e)}, status_code=502)
-    return {"jobid": jobid, "out_rel": out_rel, "name": name,
-            "risk": cli.chemistry_risk(smiles)}
+    run_id = central_jobid or windows[0]["jobid"]
+    manifest = {
+        "run_id": run_id, "smiles": smiles, "name": name,
+        "seed_K": round(seed_K, 1), "seed_src": seed_src, "center_sim": round(center_sim, 1),
+        "seeds": seeds, "base_env": base, "partition": partition, "time": time_limit,
+        "converge": converge, "stage": 1, "windows": windows, "done": False,
+        "risk": cli.chemistry_risk(smiles), "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    _save_manifest(manifest)
+    return {"run_id": run_id, "manifest": manifest}
 
 
-@app.get("/api/stream/{jobid}")
-def stream(jobid: str, out_rel: str):
-    """SSE : streame le fichier de sortie distant (cat incrémental + état squeue) jusqu'à fin du job."""
-    try:                                            # jobid/out_rel viennent du client → validés strictement
-        jobid = _check_jobid(jobid)
-        out_rel = _check_outrel(out_rel)
+@app.get("/api/run/{ident}")
+def get_run(ident: str):
+    """Retrouve un run par run_id ou par n'importe quel N° de job contenu (rechargement / reattach)."""
+    m = _find_manifest(ident)
+    if not m:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    return {"run_id": m["run_id"], "manifest": m}
+
+
+def _submit_stage2(m: dict) -> list:
+    """Soumet les 2 fenêtres élargies ∓300 K (allégées) et renvoie leurs entrées de fenêtre."""
+    new_w = []
+    for s in range(1, m["seeds"] + 1):
+        for off in cli.BLIND_STAGE2:
+            env = cli._blind_window_env(m["base_env"], m["center_sim"], off, full_props=False)
+            if m["seeds"] > 1:
+                env["SEED"] = s
+            tag = f"{m['name']}_w2_s{s}_{off:+.0f}".replace("+", "p").replace("-", "m")
+            jid, orel = cli.submit(env, tag, m["time"], m["partition"])
+            new_w.append({"jobid": jid, "out_rel": orel, "offset": off, "central": False, "seed": s})
+    return new_w
+
+
+@app.get("/api/blind_stream/{run_id}")
+def blind_stream(run_id: str):
+    """SSE de l'orchestrateur aveugle : streame toutes les fenêtres (un aller-retour SSH par tick), poole
+    quand tout est sorti de la file, lance la recette ; si l'angle reste < 48° AJOUTE le stage-2 ∓300 K
+    (côté serveur, manifeste mis à jour) puis continue ; sinon → propriétés + Tg poolée → done."""
+    try:
+        run_id = _check_jobid(run_id)
     except ValueError:
         return JSONResponse({"error": "bad_params"}, status_code=400)
-    # on ne quote QUE out_rel (déjà validé) — pas REMOTE_ROOT, dont le `~` doit rester expansé par le shell
-    out_path = f"{cli.REMOTE_ROOT}/{shlex.quote(out_rel)}"     # quoting en défense de profondeur
-    qjob = shlex.quote(jobid)
+    if _load_manifest(run_id) is None:
+        return JSONResponse({"error": "unknown_run"}, status_code=404)
 
     def gen():
-        printed = 0
+        from .tg_blind import blind_tg_recipe, converged
+        m = _load_manifest(run_id)
+        if m is None:                                       # supprimé entre-temps
+            yield _sse({"done": True, "props": None}); return
+        printed: dict = {}
         while True:
-            try:
-                tick = cli._ssh(f'cat {out_path} 2>/dev/null; echo "{cli.SEP}"; '
-                                f'squeue -j {qjob} -h -o %T 2>/dev/null', check=False, timeout=40)
-            except cli.SSHError as e:
-                yield f"data: {json.dumps({'log': f'[erreur SSH: {e}]'})}\n\n"
-                time.sleep(cli.POLL_S); continue
-            logtxt, _, state = tick.rpartition(cli.SEP)
-            state = state.strip()
-            new = logtxt[printed:]
-            if new:
-                printed = len(logtxt)
-                for line in new.splitlines():
-                    yield f"data: {json.dumps({'log': line})}\n\n"
-            if not state:                                  # job sorti de la file → terminé
-                props = cli.parse_props(logtxt)
-                yield f"data: {json.dumps({'done': True, 'props': props})}\n\n"
-                break
-            yield f"data: {json.dumps({'state': state})}\n\n"
-            time.sleep(cli.POLL_S)
-
-    return StreamingResponse(gen(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-
-SEED_MARK = "<<<TGCLI_SEED:"      # marqueur de début de log par graine dans un tick multi-seed
-
-
-@app.get("/api/stream_seeds")
-def stream_seeds(jobs: str):
-    """SSE multi-seed : streame les N jobs (logs préfixés [sX]) en un seul aller-retour SSH par tick,
-    puis agrège (moyenne ± erreur-type σ/√N) quand TOUS sont sortis de la file."""
-    try:                                                         # jobs vient du client → tout validé
-        raw_list = json.loads(jobs)
-        if not isinstance(raw_list, list) or not (1 <= len(raw_list) <= 20):
-            raise ValueError("jobs")
-        job_list = [{"seed": int(j["seed"]),
-                     "jobid": _check_jobid(j["jobid"]),
-                     "out_rel": _check_outrel(j["out_rel"])} for j in raw_list]
-    except (ValueError, KeyError, TypeError, json.JSONDecodeError):
-        return JSONResponse({"error": "bad_jobs"}, status_code=400)
-    ids = ",".join(j["jobid"] for j in job_list)                 # jobids = entiers validés
-
-    def gen():
-        printed = {j["seed"]: 0 for j in job_list}
-        total = len(job_list)
-        while True:
-            parts = [f'echo "{SEED_MARK}{j["seed"]}>>>"; '
-                     f'cat {cli.REMOTE_ROOT}/{shlex.quote(j["out_rel"])} 2>/dev/null'
-                     for j in job_list]
+            try:                                            # défense en profondeur (manifeste = serveur)
+                wins = [{"jobid": _check_jobid(w["jobid"]), "out_rel": _check_outrel(w["out_rel"]),
+                         "offset": w["offset"], "central": w["central"], "seed": w["seed"]}
+                        for w in m["windows"]]
+            except (ValueError, KeyError):
+                yield _sse({"done": True, "props": None}); return
+            ids = ",".join(w["jobid"] for w in wins)
+            parts = [f'echo "{MARK}{w["jobid"]}>>>"; '
+                     f'cat {cli.REMOTE_ROOT}/{shlex.quote(w["out_rel"])} 2>/dev/null' for w in wins]
             parts.append(f'echo "{cli.SEP}"; squeue -j {ids} -h -o %i 2>/dev/null')
             try:
                 tick = cli._ssh("; ".join(parts), check=False, timeout=60)
             except cli.SSHError as e:
-                yield f"data: {json.dumps({'log': f'[erreur SSH: {e}]'})}\n\n"
-                time.sleep(cli.POLL_S); continue
+                yield _sse({"log": f"[erreur SSH: {e}]"}); time.sleep(cli.POLL_S); continue
             body, _, state = tick.rpartition(cli.SEP)
             state = state.strip()
-            logs = {}                                            # seed → log complet
-            for seg in body.split(SEED_MARK)[1:]:
+            logs = {}                                       # jobid → log complet
+            for seg in body.split(MARK)[1:]:
                 head, _, content = seg.partition(">>>")
-                try:
-                    logs[int(head)] = content
-                except ValueError:
-                    continue
-            for j in job_list:                                   # nouvelles lignes par graine
-                seed = j["seed"]
-                full = logs.get(seed, "")
-                if len(full) > printed[seed]:
-                    new = full[printed[seed]:]
-                    printed[seed] = len(full)
-                    for line in new.splitlines():
-                        yield f"data: {json.dumps({'log': f'[s{seed}] {line}'})}\n\n"
-            if not state:                                        # toutes les graines terminées
-                per_seed = []
-                for j in job_list:
-                    p = cli.parse_props(logs.get(j["seed"], ""))
-                    if p:
-                        p["seed"] = j["seed"]
-                        per_seed.append(p)
-                if per_seed:
-                    agg = cli.aggregate_seeds(per_seed)
-                    detail = {p["seed"]: p.get("Tg_pred") for p in per_seed}
-                    yield f"data: {json.dumps({'done': True, 'props': agg, 'per_seed_tg': detail})}\n\n"
-                else:
-                    yield f"data: {json.dumps({'done': True, 'props': None})}\n\n"
-                break
+                logs[head.strip()] = content
+            for w in wins:                                  # nouvelles lignes par fenêtre
+                full = logs.get(w["jobid"], "")
+                pr = printed.get(w["jobid"], 0)
+                if len(full) > pr:
+                    printed[w["jobid"]] = len(full)
+                    tag = f"{w['offset']:+.0f}K" + (f" s{w['seed']}" if m["seeds"] > 1 else "")
+                    for line in full[pr:].splitlines():
+                        yield _sse({"log": f"[{tag}] {line}"})
             running = [x for x in state.split() if x]
-            yield f"data: {json.dumps({'seedstate': {'done': total - len(running), 'total': total}})}\n\n"
-            time.sleep(cli.POLL_S)
+            yield _sse({"windowstate": {"done": len(wins) - len(running), "total": len(wins),
+                                        "stage": m["stage"]}})
+            if running:
+                time.sleep(cli.POLL_S); continue
+            # ── toutes les fenêtres terminées : poolage + recette ──
+            curves = cli._pool_windows([w["out_rel"] for w in wins])
+            tg, info = blind_tg_recipe(curves)
+            angle = info.get("angle_deg")
+            if (m.get("converge", True) and m["stage"] == 1 and tg is not None
+                    and (angle is None or angle < cli.BLIND_ANGLE_THRESH)):
+                try:
+                    new_w = _submit_stage2(m)
+                except cli.SSHError as e:
+                    new_w = []
+                    yield _sse({"log": f"[erreur SSH stage 2: {e}]"})
+                if new_w:
+                    m["windows"] += new_w; m["stage"] = 2
+                    _save_manifest(m)
+                    yield _sse({"stage2": {"added": len(new_w),
+                                           "angle": round(angle, 1) if angle is not None else None,
+                                           "jobids": [w["jobid"] for w in new_w]}})
+                    time.sleep(cli.POLL_S); continue
+            # ── finalisation : propriétés (fenêtres centrales) + Tg poolée aveugle ──
+            per_seed = []
+            for w in wins:
+                if w["central"]:
+                    p = cli.parse_props(logs.get(w["jobid"], ""))
+                    if p:
+                        p["seed"] = w["seed"]; per_seed.append(p)
+            props = cli.aggregate_seeds(per_seed) if len(per_seed) > 1 else (per_seed[0] if per_seed else {})
+            blind = None
+            if tg is not None:
+                tg_K = round(tg + 273.15, 1)
+                props["Tg_pred"] = tg_K
+                props.pop("Tg_pred_ci", None)               # incertitude = angle, pas le fit mono-fenêtre
+                if info.get("Tg_sim") is not None:
+                    props["Tg_sim"] = info["Tg_sim"]
+                props["confidence"] = info.get("tier", "moyenne")
+                _, conv_ok, _ = converged(angle if angle is not None else 0.0, m["stage"],
+                                          angle_thresh=cli.BLIND_ANGLE_THRESH, max_calc=2)
+                blind = {"tg_K": tg_K, "tg_C": round(tg, 1), "tier": info.get("tier"),
+                         "angle": round(angle, 1) if angle is not None else None,
+                         "value_obs": info.get("value_obs"), "pdefay": info.get("pdefay"),
+                         "converged": conv_ok, "n_windows": len(wins)}
+            m["done"] = True; m["result"] = blind; _save_manifest(m)
+            yield _sse({"done": True, "props": props or None, "blind": blind, "risk": m.get("risk", [])})
+            return
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
